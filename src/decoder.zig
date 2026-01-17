@@ -1,7 +1,27 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub fn decode(gpa: Allocator) void {
+const DecodeOptions = struct {
+    /// Whether to borrow the input string or to copy it to the result type.
+    borrow_input: bool = false,
+};
+
+const Parsed = struct {
+    arena: std.heap.ArenaAllocator,
+
+    /// The input buffer of the parsed TOML document. It is either borrowed or
+    /// owned by the arena depending on `DecodeOptions`.
+    input: []const u8,
+};
+
+pub fn decode(gpa: Allocator, input: []const u8, options: DecodeOptions) !Parsed {
     const arena: std.heap.ArenaAllocator = .init(gpa);
-    _ = arena;
+    const allocator = arena.allocator();
+
+    const owned_input = if (options.borrow_input) input else try allocator.dupe(u8, input);
+
+    return .{
+        .arena = arena,
+        .input = owned_input,
+    };
 }
