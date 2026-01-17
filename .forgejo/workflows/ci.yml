@@ -14,8 +14,7 @@ permissions:
 jobs:
   test:
     runs-on: codeberg-tiny
-
     steps:
-      - uses: actions/checkout@v6.0.1
-      - uses: mlugg/setup-zig@v2.1.0
+      - uses: https://code.forgejo.org/actions/checkout@v6.0.2
+      - uses: https://codeberg.org/mlugg/setup-zig@v2.2.0
       - run: zig build test
