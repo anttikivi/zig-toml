@@ -1,9 +1,14 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const TomlVersion = @import("root.zig").TomlVersion;
+
 const DecodeOptions = struct {
     /// Whether to borrow the input string or to copy it to the result type.
     borrow_input: bool = false,
+
+    /// The version of TOML to accept in the decoding.
+    tomlVersion: TomlVersion = .@"1.1.0",
 };
 
 const Parsed = struct {
