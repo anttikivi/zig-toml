@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ forgejo.head_ref || forgejo.run_number }}-${{ forgejo.actor }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: codeberg-tiny
+
+    steps:
+      - uses: actions/checkout@v6.0.1
+      - uses: mlugg/setup-zig@v2.1.0
+      - run: zig build test
