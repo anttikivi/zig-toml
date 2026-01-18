@@ -14,6 +14,21 @@ pub fn build(b: *std.Build) void {
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
-    const test_step = b.step("test", "Run tests");
+    const test_step = b.step("test", "Run all of the tests");
     test_step.dependOn(&run_mod_tests.step);
+
+    // Formatting tasks
+
+    const fmt_include_paths = &.{"."};
+
+    {
+        const step = b.step("fmt", "Modify source files in place to have conforming formatting");
+        step.dependOn(&b.addFmt(.{ .paths = fmt_include_paths }).step);
+    }
+
+    {
+        const step = b.step("test-fmt", "Check source files having conforming formatting");
+        step.dependOn(&b.addFmt(.{ .paths = fmt_include_paths, .check = true }).step);
+        test_step.dependOn(step);
+    }
 }
