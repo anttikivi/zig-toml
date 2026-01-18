@@ -63,23 +63,28 @@ pub fn init(arena: Allocator, gpa: Allocator, input: []const u8, opts: DecodeOpt
     };
 }
 
+/// Returns the next valid token from the stored TOML input when the parsing is
+/// at a key.
 pub fn nextKey(self: *Scanner) Error!Token {
     return self.next(true);
 }
 
+/// Returns the next valid token from the stored TOML input when the parsing is
+/// at a value.
 pub fn nextValue(self: *Scanner) Error!Token {
     return self.next(false);
 }
 
+/// Returns the next valid token from the stored TOML input.
 fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
     while (self.cursor < self.input.len) {
-        const c = self.advance();
+        const c = self.nextChar();
         switch (c) {
             '\n' => return .line_feed,
             ' ', '\t' => continue,
             '#' => {
                 while (self.cursor < self.input.len) {
-                    switch (self.advance()) {
+                    switch (self.nextChar()) {
                         // \n, marked as hex to make it clearer that it's one of
                         // the characters that are not permitted.
                         0x0a => break,
@@ -96,7 +101,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
             ',' => return .comma,
             '[' => {
                 if (key_mode and self.peek() == '[') {
-                    _ = self.advance();
+                    _ = self.nextChar();
                     return .double_left_bracket;
                 }
 
@@ -111,7 +116,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
 
 /// Moves the Scanner to the next position and returns the valid, read
 /// character.
-fn advance(self: *Scanner) u8 {
+fn nextChar(self: *Scanner) u8 {
     if (self.cursor >= self.input.len) {
         return end_of_input;
     }
