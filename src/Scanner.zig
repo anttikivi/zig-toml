@@ -159,3 +159,52 @@ fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null
 
     return opts.err;
 }
+
+test nextKey {
+    const cases = [_]struct { input: []const u8, seq: []const Token }{
+        .{
+            .input =
+            \\
+            \\
+            ,
+            .seq = &[_]Token{
+                .line_feed,
+                .end_of_file,
+            },
+        },
+        .{
+            .input =
+            \\# This is comment
+            \\
+            ,
+            .seq = &[_]Token{
+                .end_of_file,
+            },
+        },
+        .{
+            .input =
+            \\# This is comment
+            \\
+            \\
+            ,
+            .seq = &[_]Token{
+                .line_feed,
+                .end_of_file,
+            },
+        },
+    };
+
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var scanner = init(allocator, std.testing.allocator, case.input, .{});
+
+        for (case.seq) |expected| {
+            const actual = try scanner.nextKey();
+            try std.testing.expectEqual(expected, actual);
+        }
+    }
+}
+
+test nextValue {}
