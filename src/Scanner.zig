@@ -72,8 +72,6 @@ pub fn nextValue(self: *Scanner) Error!Token {
 }
 
 fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
-    _ = key_mode;
-
     while (self.cursor < self.input.len) {
         const c = self.advance();
         switch (c) {
@@ -93,6 +91,18 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
                 }
                 continue;
             },
+            '.' => return .dot,
+            '=' => return .equal,
+            ',' => return .comma,
+            '[' => {
+                if (key_mode and self.peek() == '[') {
+                    _ = self.advance();
+                    return .double_left_bracket;
+                }
+
+                return .left_bracket;
+            },
+            else => return .end_of_file, // TODO: Handle.
         }
     }
 
@@ -106,7 +116,7 @@ fn advance(self: *Scanner) u8 {
         return end_of_input;
     }
 
-    const c = self.input[self.cursor];
+    var c = self.input[self.cursor];
     self.cursor += 1;
 
     // CRLF counts as a single newline character.
@@ -120,6 +130,15 @@ fn advance(self: *Scanner) u8 {
     }
 
     return c;
+}
+
+/// Take a look at the next character without advancing.
+fn peek(self: *const Scanner) u8 {
+    if (self.cursor >= self.input.len) {
+        return end_of_input;
+    }
+
+    return self.input[self.cursor];
 }
 
 /// Fail the parsing in the Scanner. This either fills the Diagnostics with
