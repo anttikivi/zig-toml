@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const Parser = @import("Parser.zig");
 const TomlVersion = @import("root.zig").TomlVersion;
 
-const DecodeOptions = struct {
+pub const DecodeOptions = struct {
     /// Whether to borrow the input string or to copy it to the result type.
     borrow_input: bool = false,
 
@@ -22,17 +22,47 @@ const DecodeOptions = struct {
 /// `const opts = DecodeOptions{ .diagnostics = &diagnostics };`.
 ///
 /// The caller must call `deinit` on the diagnostics object. It owns
-/// the `message` string if the decoder has failed, and it is allocated using
-/// the general-purpose allocator that was passed in to `toml.decode`.
-/// The `snippet` points to the same string that the parsed result would point
-/// to.
-const Diagnostics = struct {
+/// the `snippet` and `message` strings if the decoder has failed, and it is
+/// allocated using the general-purpose allocator that was passed in to
+/// `toml.decode`. This is done so that the diagnostics object can be safely
+/// deallocated as the arena is not returned from `toml.decode` on errors.
+pub const Diagnostics = struct {
     line: ?usize = null,
     column: ?usize = null,
     snippet: ?[]const u8 = null,
     message: ?[]const u8 = null,
 
+    /// Initialize the given Diagnostics with the approapriate information when
+    /// the current line is not known. The Diagnostics is modified in place and
+    /// the line is calculated from the cursor position and the input.
+    pub fn init(self: *@This(), gpa: Allocator, msg: []const u8, input: []const u8, cursor: usize) void {
+        const line = 1 + std.mem.count(u8, input[0..cursor], "\n");
+        self.initLineKnown(gpa, msg, input, cursor, line);
+    }
+
+    /// Initialize the given Diagnostics with the approapriate information.
+    pub fn initLineKnown(
+        self: *@This(),
+        gpa: Allocator,
+        msg: []const u8,
+        input: []const u8,
+        cursor: usize,
+        line: usize,
+    ) void {
+        const start = std.mem.lastIndexOfScalar(u8, input[0..cursor], '\n') orelse 0;
+        const end = std.mem.indexOfScalarPos(u8, input, cursor, '\n') orelse input.len;
+        const col = (cursor - start) + 1;
+        self.line = line;
+        self.column = col;
+        self.snippet = gpa.dupe(u8, input[(if (start > 0) start + 1 else start)..end]);
+        self.message = gpa.dupe(u8, msg);
+    }
+
     pub fn deinit(self: *@This(), gpa: Allocator) void {
+        if (self.snippet) |s| {
+            gpa.free(s);
+        }
+
         if (self.message) |m| {
             gpa.free(m);
         }
@@ -53,7 +83,7 @@ pub fn decode(gpa: Allocator, input: []const u8, options: DecodeOptions) !Parsed
 
     const owned_input = if (options.borrow_input) input else try allocator.dupe(u8, input);
 
-    const parser: Parser = .init(allocator, owned_input);
+    const parser: Parser = .init(allocator, gpa, owned_input, options);
     _ = parser;
 
     return .{

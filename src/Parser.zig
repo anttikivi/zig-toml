@@ -3,6 +3,7 @@ const Parser = @This();
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const DecodeOptions = @import("decoder.zig").DecodeOptions;
 const Scanner = @import("Scanner.zig");
 
 arena: Allocator,
@@ -12,10 +13,10 @@ const Error = Scanner.Error || error{UnexpectedToken};
 
 const ParsingTable = struct {};
 
-pub fn init(arena: Allocator, input: []const u8) Parser {
+pub fn init(arena: Allocator, gpa: Allocator, input: []const u8, opts: DecodeOptions) Parser {
     return .{
         .arena = arena,
-        .scanner = Scanner.init(arena, input),
+        .scanner = Scanner.init(arena, gpa, input, opts),
     };
 }
 
