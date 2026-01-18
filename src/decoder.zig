@@ -78,7 +78,7 @@ const Parsed = struct {
 };
 
 pub fn decode(gpa: Allocator, input: []const u8, options: DecodeOptions) !Parsed {
-    const arena: std.heap.ArenaAllocator = .init(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
     const allocator = arena.allocator();
 
     const owned_input = if (options.borrow_input) input else try allocator.dupe(u8, input);
