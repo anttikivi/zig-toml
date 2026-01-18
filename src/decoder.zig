@@ -32,15 +32,21 @@ pub const Diagnostics = struct {
     snippet: ?[]const u8 = null,
     message: ?[]const u8 = null,
 
-    /// Initialize the given Diagnostics with the approapriate information when
+    /// Initialize the given Diagnostics with the appropriate information when
     /// the current line is not known. The Diagnostics is modified in place and
     /// the line is calculated from the cursor position and the input.
-    pub fn init(self: *@This(), gpa: Allocator, msg: []const u8, input: []const u8, cursor: usize) void {
+    pub fn init(
+        self: *@This(),
+        gpa: Allocator,
+        msg: []const u8,
+        input: []const u8,
+        cursor: usize,
+    ) Allocator.Error!void {
         const line = 1 + std.mem.count(u8, input[0..cursor], "\n");
-        self.initLineKnown(gpa, msg, input, cursor, line);
+        try self.initLineKnown(gpa, msg, input, cursor, line);
     }
 
-    /// Initialize the given Diagnostics with the approapriate information.
+    /// Initialize the given Diagnostics with the appropriate information.
     pub fn initLineKnown(
         self: *@This(),
         gpa: Allocator,
@@ -48,14 +54,14 @@ pub const Diagnostics = struct {
         input: []const u8,
         cursor: usize,
         line: usize,
-    ) void {
+    ) Allocator.Error!void {
         const start = std.mem.lastIndexOfScalar(u8, input[0..cursor], '\n') orelse 0;
         const end = std.mem.indexOfScalarPos(u8, input, cursor, '\n') orelse input.len;
         const col = (cursor - start) + 1;
         self.line = line;
         self.column = col;
-        self.snippet = gpa.dupe(u8, input[(if (start > 0) start + 1 else start)..end]);
-        self.message = gpa.dupe(u8, msg);
+        self.snippet = try gpa.dupe(u8, input[(if (start > 0) start + 1 else start)..end]);
+        self.message = try gpa.dupe(u8, msg);
     }
 
     pub fn deinit(self: *@This(), gpa: Allocator) void {

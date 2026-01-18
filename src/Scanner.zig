@@ -21,7 +21,7 @@ diagnostics: ?*Diagnostics = null,
 /// Sentinel character that marks the end of input.
 const end_of_input: u8 = 0;
 
-const Error = error{ InvalidControlCharacter, Reported };
+const Error = Allocator.Error || error{ InvalidControlCharacter, Reported };
 
 const Token = union(enum) {
     dot,
@@ -81,8 +81,10 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
             '#' => {
                 while (self.cursor < self.input.len) {
                     switch (self.advance()) {
-                        '\n' => break,
-                        0...8, 0x0a...0x1f, 0x7f => {
+                        // \n, marked as hex to make it clearer that it's one of
+                        // the characters that are not permitted.
+                        0x0a => break,
+                        0...8, 0x0b...0x1f, 0x7f => {
                             return self.fail(.{ .err = error.InvalidControlCharacter });
                         },
                         else => {},
@@ -123,12 +125,14 @@ fn advance(self: *Scanner) u8 {
 /// the appropriate information and returns `error.Reported` or returns
 /// the given error.
 fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null }) Error {
-    if (self.diagnostics) |*d| {
+    if (self.diagnostics) |d| {
         const msg = if (opts.msg) |m| m else switch (opts.err) {
             error.InvalidControlCharacter => "invalid control character",
             error.Reported => @panic("fail with error.Reported"),
+            // OOM should not go through this function.
+            error.OutOfMemory => @panic("fail with error.OutOfMemory"),
         };
-        d.initLineKnown(self.gpa, msg, self.input, self.cursor, self.line);
+        try d.initLineKnown(self.gpa, msg, self.input, self.cursor, self.line);
 
         return error.Reported;
     }
