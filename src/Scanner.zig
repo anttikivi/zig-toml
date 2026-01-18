@@ -16,6 +16,7 @@ arena: Allocator,
 gpa: Allocator,
 input: []const u8,
 cursor: usize = 0,
+line: usize = 1,
 diagnostics: ?*Diagnostics = null,
 
 /// Sentinel character that marks the end of input.
