@@ -13,7 +13,7 @@ pub const DecodeOptions = struct {
     diagnostics: ?*Diagnostics = null,
 
     /// The version of TOML to accept in the decoding.
-    tomlVersion: TomlVersion = .@"1.1.0",
+    toml_version: TomlVersion = .@"1.1.0",
 };
 
 /// Diagnostics can contain additional information about errors in decoding. To
