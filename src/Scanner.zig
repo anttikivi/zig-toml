@@ -5,10 +5,12 @@ const Allocator = std.mem.Allocator;
 
 const DecodeOptions = @import("decoder.zig").DecodeOptions;
 const Diagnostics = @import("decoder.zig").Diagnostics;
+const TomlVersion = @import("root.zig").TomlVersion;
 const Datetime = @import("value.zig").Datetime;
 const Date = @import("value.zig").Date;
 const Time = @import("value.zig").Time;
 
+features: Features,
 arena: Allocator,
 
 /// The general-purpose allocator used to create the parsing arena. Here it is
@@ -23,6 +25,23 @@ diagnostics: ?*Diagnostics = null,
 const end_of_input: u8 = 0;
 
 const Error = Allocator.Error || error{ InvalidControlCharacter, Reported };
+
+/// Feature flags that determine which TOML features that have changed since
+/// 1.0.0 are supported.
+const Features = packed struct {
+    escape_e: bool = false,
+    escape_xhh: bool = false,
+
+    fn init(toml_version: TomlVersion) @This() {
+        return switch (toml_version) {
+            .@"1.0.0" => .{},
+            .@"1.1.0" => .{
+                .escape_e = true,
+                .escape_xhh = true,
+            },
+        };
+    }
+};
 
 const Token = union(enum) {
     dot,
@@ -56,6 +75,7 @@ const Token = union(enum) {
 
 pub fn init(arena: Allocator, gpa: Allocator, input: []const u8, opts: DecodeOptions) Scanner {
     return .{
+        .features = Features.init(opts.toml_version),
         .arena = arena,
         .gpa = gpa,
         .input = input,
