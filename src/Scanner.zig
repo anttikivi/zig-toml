@@ -1,5 +1,6 @@
 const Scanner = @This();
 
+const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -531,6 +532,7 @@ fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null
         const msg = if (opts.msg) |m| m else switch (opts.err) {
             error.InvalidControlCharacter => "invalid control character",
             error.InvalidEscapeSequence => "invalid escape sequence",
+            error.UnexpectedToken => "unexpected token",
             error.UnterminatedString => "unterminated string",
             error.Reported => @panic("fail with error.Reported"),
             // OOM should not go through this function.
@@ -548,79 +550,350 @@ fn isValidChar(c: u8) bool {
     return std.ascii.isPrint(c) or (c & 0x80) != 0;
 }
 
-test nextKey {
-    const cases = [_]struct { input: []const u8, seq: []const Token }{
-        .{
-            .input =
-            \\
-            \\
-            ,
-            .seq = &[_]Token{
-                .line_feed,
-                .end_of_file,
-            },
+const TestToken = union(enum) {
+    dot,
+    equal,
+    comma,
+    left_bracket, // [
+    double_left_bracket, // [[
+    right_bracket, // ]
+    double_right_bracket, // ]]
+    left_brace, // {
+    right_brace, // }
+
+    literal: []const u8,
+    string: []const u8,
+    multiline_string: []const u8,
+    literal_string: []const u8,
+    multiline_literal_string: []const u8,
+
+    int: i64,
+    float: f64,
+    bool: bool,
+
+    datetime: Datetime,
+    local_datetime: Datetime,
+    local_date: Date,
+    local_time: Time,
+
+    line_feed,
+    end_of_file,
+
+    err: Error,
+};
+
+const next_test_cases = [_]struct { input: []const u8, seq: []const TestToken }{
+    .{
+        .input =
+        \\
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .line_feed,
+            .end_of_file,
         },
-        .{
-            .input =
-            \\# This is comment
-            \\
-            ,
-            .seq = &[_]Token{
-                .end_of_file,
-            },
+    },
+    .{
+        .input =
+        \\# This is comment
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .end_of_file,
         },
-        .{
-            .input =
-            \\# This is comment
-            \\
-            \\
-            ,
-            .seq = &[_]Token{
-                .line_feed,
-                .end_of_file,
-            },
+    },
+    .{
+        .input =
+        \\# This is comment
+        \\
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .line_feed,
+            .end_of_file,
         },
-        .{
-            .input =
-            \\"This is a string"
-            \\
-            ,
-            .seq = &[_]Token{
-                .{ .string = "This is a string" },
-                .line_feed,
-                .end_of_file,
-            },
+    },
+    .{
+        .input =
+        \\"This is a string"
+        ,
+        .seq = &[_]TestToken{
+            .{ .string = "This is a string" },
+            .end_of_file,
         },
-        .{
-            .input =
-            \\"This is \uFFFF a string"
-            \\
-            ,
-            .seq = &[_]Token{
-                .{ .string = "This is \\uFFFF a string" },
-                .line_feed,
-                .end_of_file,
-            },
+    },
+    .{
+        .input =
+        \\"This is a string"
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .string = "This is a string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"This is a string
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.UnterminatedString }},
+    },
+    .{
+        .input =
+        \\"This is \uFFFF a string"
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .string = "This is \\uFFFF a string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"This is \uFFF a string"
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+    },
+    .{
+        .input =
+        \\"""This is a
+        \\   multiline string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a\n   multiline string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""This is a
+        \\   multiline \uFFFF string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a\n   multiline \\uFFFF string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""This is a
+        \\   multiline \uFFF string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+    },
+    .{
+        .input =
+        \\"""This is a
+        \\   multiline \UFFFFFFFF string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a\n   multiline \\UFFFFFFFF string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""This is a
+        \\   multiline \UFFFFFFF string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+    },
+    .{
+        .input =
+        \\"""This is a \
+        \\   multiline string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a \\\n   multiline string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""This is a \word
+        \\   multiline string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+    },
+    .{
+        .input =
+        \\"""This is a \ word
+        \\   multiline string
+        \\"""
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+    },
+    .{
+        .input =
+        \\"""
+        \\This is a multiline string"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a multiline string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""
+        \\This is a multiline string""
+        \\
+        ,
+        .seq = &[_]TestToken{.{ .err = error.UnterminatedString }},
+    },
+    .{
+        .input =
+        \\"""
+        \\This is a multiline
+        \\
+        \\string"""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a multiline\n\nstring" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\"""This is a multiline string"""""
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_string = "This is a multiline string\"\"" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+};
+
+fn convertUnion(source: anytype, comptime Dest: type) Dest {
+    if (!builtin.is_test) {
+        @compileError("convertUnion may only be used in tests");
+    }
+
+    const Source = @TypeOf(source);
+    const info = @typeInfo(Source);
+
+    if (info != .@"union" or info.@"union".tag_type == null) {
+        @compileError("convertUnion only works on tagged unions");
+    }
+
+    return switch (source) {
+        inline else => |payload, tag| {
+            const field_name = @tagName(tag);
+            if (!@hasField(Dest, field_name)) {
+                @compileError(
+                    "destination " ++ @typeName(Dest) ++ " is missing field: " ++ field_name,
+                );
+            }
+            return @unionInit(Dest, field_name, payload);
         },
     };
+}
 
-    for (cases) |case| {
+fn testNextKey(self: *Scanner) Error!TestToken {
+    if (!builtin.is_test) {
+        @compileError("testNextKey may only be used in tests");
+    }
+
+    const result = try self.nextKey();
+    return convertUnion(result, TestToken);
+}
+
+fn testNextValue(self: *Scanner) Error!TestToken {
+    if (!builtin.is_test) {
+        @compileError("testNextValue may only be used in tests");
+    }
+
+    const result = try self.nextValue();
+    return convertUnion(result, TestToken);
+}
+
+test nextKey {
+    for (next_test_cases) |case| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
         var scanner = init(allocator, std.testing.allocator, case.input, .{});
 
         for (case.seq) |expected| {
-            const actual = try scanner.nextKey();
-            switch (actual) {
-                .string => |actual_str| {
-                    try std.testing.expect(expected == .string);
-                    try std.testing.expectEqualStrings(expected.string, actual_str);
+            switch (expected) {
+                .err => |e| {
+                    try std.testing.expectError(e, scanner.testNextKey());
                 },
-                else => try std.testing.expectEqual(expected, actual),
+                else => {
+                    const actual = try scanner.testNextKey();
+                    switch (actual) {
+                        .string => |actual_str| {
+                            try std.testing.expect(expected == .string);
+                            try std.testing.expectEqualStrings(expected.string, actual_str);
+                        },
+                        .multiline_string => |actual_str| {
+                            try std.testing.expect(expected == .multiline_string);
+                            try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
+                        },
+                        else => try std.testing.expectEqual(expected, actual),
+                    }
+                },
             }
         }
     }
 }
 
-test nextValue {}
+test nextValue {
+    for (next_test_cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var scanner = init(allocator, std.testing.allocator, case.input, .{});
+
+        for (case.seq) |expected| {
+            switch (expected) {
+                .err => |e| {
+                    try std.testing.expectError(e, scanner.testNextValue());
+                },
+                else => {
+                    const actual = try scanner.testNextValue();
+                    switch (actual) {
+                        .string => |actual_str| {
+                            try std.testing.expect(expected == .string);
+                            try std.testing.expectEqualStrings(expected.string, actual_str);
+                        },
+                        .multiline_string => |actual_str| {
+                            try std.testing.expect(expected == .multiline_string);
+                            try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
+                        },
+                        else => try std.testing.expectEqual(expected, actual),
+                    }
+                },
+            }
+        }
+    }
+}
