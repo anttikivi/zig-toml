@@ -152,7 +152,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
             },
             '\'' => {
                 self.cursor -= 1;
-                // return self.scanLiteralString();
+                return self.scanLiteralString();
             },
             else => return .end_of_file, // TODO: Handle literals.
         }
@@ -322,8 +322,6 @@ fn scanString(self: *Scanner) !Token {
 
     const result = self.input[start..self.cursor];
     self.cursor += 1;
-
-    assert(self.cursor >= self.input.len or self.input[self.cursor] != '"');
 
     return .{ .string = result };
 }
@@ -500,6 +498,41 @@ fn scanMultilineString(self: *Scanner) !Token {
     }
 
     return self.fail(.{ .err = error.UnterminatedString });
+}
+
+fn scanLiteralString(self: *Scanner) Error!Token {
+    assert(self.peek() == '\'');
+
+    if (self.matchN('\'', 3)) {
+        // TODO: Handle multiline literal strings.
+        return .end_of_file;
+    }
+
+    _ = self.nextChar();
+    const start = self.cursor;
+
+    while (self.cursor < self.input.len and self.input[self.cursor] != '\'') : (self.cursor += 1) {
+        const c = self.input[self.cursor];
+        if (c == '\n' or c == '\r') {
+            return self.fail(.{ .err = error.UnterminatedString });
+        }
+
+        if (!isValidChar(c) and c != '\t') {
+            return self.fail(.{ .err = error.InvalidControlCharacter });
+        }
+    }
+
+    // TODO: Do we compare self.input[self.cursor] != '\'' here?
+    if (self.cursor >= self.input.len) {
+        return self.fail(.{ .err = error.UnterminatedString });
+    }
+
+    assert(self.input[self.cursor] == '\'');
+
+    const result = self.input[start..self.cursor];
+    self.cursor += 1;
+
+    return .{ .literal_string = result };
 }
 
 /// Skips the whitespace after a line-ending backslash in a multiline string.
@@ -791,6 +824,42 @@ const next_test_cases = [_]struct { input: []const u8, seq: []const TestToken }{
             .end_of_file,
         },
     },
+    .{
+        .input =
+        \\'This is a literal string'
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .literal_string = "This is a literal string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'This \\ is a literal string'
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .literal_string = "This \\\\ is a literal string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input = "'This is\ta literal string'",
+        .seq = &[_]TestToken{
+            .{ .literal_string = "This is\ta literal string" },
+            .end_of_file,
+        },
+    },
+    .{
+        .input = "'This is\\ta literal string'",
+        .seq = &[_]TestToken{
+            .{ .literal_string = "This is\\ta literal string" },
+            .end_of_file,
+        },
+    },
 };
 
 fn convertUnion(source: anytype, comptime Dest: type) Dest {
@@ -859,6 +928,10 @@ test nextKey {
                             try std.testing.expect(expected == .multiline_string);
                             try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
                         },
+                        .literal_string => |actual_str| {
+                            try std.testing.expect(expected == .literal_string);
+                            try std.testing.expectEqualStrings(expected.literal_string, actual_str);
+                        },
                         else => try std.testing.expectEqual(expected, actual),
                     }
                 },
@@ -889,6 +962,10 @@ test nextValue {
                         .multiline_string => |actual_str| {
                             try std.testing.expect(expected == .multiline_string);
                             try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
+                        },
+                        .literal_string => |actual_str| {
+                            try std.testing.expect(expected == .literal_string);
+                            try std.testing.expectEqualStrings(expected.literal_string, actual_str);
                         },
                         else => try std.testing.expectEqual(expected, actual),
                     }
