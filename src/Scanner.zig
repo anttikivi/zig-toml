@@ -28,6 +28,7 @@ const end_of_input: u8 = 0;
 const Error = Allocator.Error || error{
     InvalidControlCharacter,
     InvalidEscapeSequence,
+    UnexpectedToken,
     UnterminatedString,
     Reported,
 };
@@ -217,8 +218,7 @@ fn scanString(self: *Scanner) !Token {
     assert(self.peek() == '"');
 
     if (self.matchN('"', 3)) {
-        // TODO: Handle multiline string.
-        return .end_of_file;
+        return self.scanMultilineString();
     }
 
     _ = self.nextChar(); // skip opening quote
@@ -242,12 +242,14 @@ fn scanString(self: *Scanner) !Token {
             switch (c) {
                 // Skip the "normal" escape sequences.
                 '"', '\\', 'b', 'f', 'n', 'r', 't' => self.cursor += 1,
+
                 // Escape character in TOML 1.1.0.
                 'e' => if (self.features.escape_e) {
                     self.cursor += 1;
                 } else {
                     return self.fail(.{ .err = error.InvalidEscapeSequence });
                 },
+
                 // \xHH for Unicode codepoints < 256.
                 'x' => if (self.features.escape_xhh) {
                     self.cursor += 1;
@@ -266,6 +268,7 @@ fn scanString(self: *Scanner) !Token {
                 } else {
                     return self.fail(.{ .err = error.InvalidEscapeSequence });
                 },
+
                 'u' => {
                     self.cursor += 1;
 
@@ -281,6 +284,7 @@ fn scanString(self: *Scanner) !Token {
                         self.cursor += 1;
                     }
                 },
+
                 'U' => {
                     self.cursor += 1;
 
@@ -296,9 +300,12 @@ fn scanString(self: *Scanner) !Token {
                         self.cursor += 1;
                     }
                 },
+
                 else => return self.fail(.{ .err = error.InvalidEscapeSequence }),
             }
         } else if (isValidChar(c) or c == ' ' or c == '\t') {
+            // TODO: See the uses for `isValidChar` and determine if
+            // the whitespaces should be included in it.
             self.cursor += 1;
         } else {
             return self.fail(.{ .err = error.InvalidControlCharacter });
@@ -315,9 +322,205 @@ fn scanString(self: *Scanner) !Token {
     const result = self.input[start..self.cursor];
     self.cursor += 1;
 
-    assert(self.input[self.cursor] != '"');
+    assert(self.cursor >= self.input.len or self.input[self.cursor] != '"');
 
     return .{ .string = result };
+}
+
+fn scanMultilineString(self: *Scanner) !Token {
+    assert(self.matchN('"', 3));
+
+    self.cursor += 3; // skip opening """
+
+    // Newline that immediately follows """ is trimmed.
+    if (self.cursor < self.input.len and self.input[self.cursor] == '\n') {
+        self.cursor += 1;
+        self.line += 1;
+    } else if (self.cursor + 1 < self.input.len and
+        self.input[self.cursor] == '\r' and
+        self.input[self.cursor + 1] == '\n')
+    {
+        self.cursor += 2;
+        self.line += 1;
+    }
+
+    const start = self.cursor;
+
+    // TODO: Force upper limit on loops.
+    while (self.cursor < self.input.len) {
+        var c = self.input[self.cursor];
+
+        if (c == '"') {
+            var i: usize = 0;
+
+            while (self.cursor + i < self.input.len and
+                self.input[self.cursor + i] == '"') : (i += 1)
+            {}
+
+            if (i >= 3) {
+                if (i > 5) {
+                    return self.fail(.{
+                        .err = error.UnexpectedToken,
+                        .msg = "invalid closing quotes",
+                    });
+                }
+
+                const extra = i - 3;
+                const result = self.input[start .. self.cursor + extra];
+                self.cursor += i;
+                return .{ .multiline_string = result };
+            } else {
+                self.cursor += i; // eat the non-closing quotes
+            }
+        } else if (c == '\\') {
+            self.cursor += 1;
+
+            if (self.cursor >= self.input.len) {
+                return self.fail(.{ .err = error.UnterminatedString });
+            }
+
+            c = self.input[self.cursor];
+
+            switch (c) {
+                '"', '\\', 'b', 'f', 'n', 'r', 't' => self.cursor += 1,
+
+                'e' => if (self.features.escape_e) {
+                    self.cursor += 1;
+                } else {
+                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                },
+
+                'x' => if (self.features.escape_xhh) {
+                    self.cursor += 1;
+
+                    if (self.cursor + 2 > self.input.len) {
+                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    }
+
+                    for (0..2) |_| {
+                        if (!std.ascii.isHex(self.input[self.cursor])) {
+                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        }
+
+                        self.cursor += 1;
+                    }
+                } else {
+                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                },
+
+                'u' => {
+                    self.cursor += 1;
+
+                    if (self.cursor + 4 > self.input.len) {
+                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    }
+
+                    for (0..4) |_| {
+                        if (!std.ascii.isHex(self.input[self.cursor])) {
+                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        }
+
+                        self.cursor += 1;
+                    }
+                },
+
+                'U' => {
+                    self.cursor += 1;
+
+                    if (self.cursor + 8 > self.input.len) {
+                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    }
+
+                    for (0..8) |_| {
+                        if (!std.ascii.isHex(self.input[self.cursor])) {
+                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        }
+
+                        self.cursor += 1;
+                    }
+                },
+
+                // Line-ending backslash.
+                '\n' => {
+                    self.cursor += 1;
+                    self.line += 1;
+                    try self.skipLineEndingWhitespace();
+                },
+
+                '\r' => if (self.cursor + 1 < self.input.len and
+                    self.input[self.cursor + 1] == '\n')
+                {
+                    self.cursor += 2;
+                    self.line += 1;
+                    try self.skipLineEndingWhitespace();
+                } else {
+                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                },
+
+                ' ', '\t' => {
+                    while (self.cursor < self.input.len) {
+                        c = self.input[self.cursor];
+                        if (c == ' ' or c == '\t') {
+                            self.cursor += 1;
+                        } else if (c == '\n') {
+                            self.cursor += 1;
+                            self.line += 1;
+                            break;
+                        } else if (c == '\r' and self.cursor + 1 < self.input.len and
+                            self.input[self.cursor + 1] == '\n')
+                        {
+                            self.cursor += 2;
+                            self.line += 1;
+                            break;
+                        } else {
+                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        }
+                    }
+
+                    // After finding newline, eat the rest of the whitespace chars.
+                    try self.skipLineEndingWhitespace();
+                },
+
+                else => return self.fail(.{ .err = error.InvalidEscapeSequence }),
+            }
+        } else if (c == '\n') {
+            self.cursor += 1;
+            self.line += 1;
+        } else if (c == '\r' and self.cursor + 1 < self.input.len and
+            self.input[self.cursor + 1] == '\n')
+        {
+            self.cursor += 2;
+            self.line += 1;
+        } else if (isValidChar(c) or c == ' ' or c == '\t') {
+            self.cursor += 1;
+        } else {
+            return self.fail(.{ .err = error.InvalidControlCharacter });
+        }
+    }
+
+    return self.fail(.{ .err = error.UnterminatedString });
+}
+
+/// Skips the whitespace after a line-ending backslash in a multiline string.
+fn skipLineEndingWhitespace(self: *Scanner) !void {
+    while (self.cursor < self.input.len) {
+        const c = self.input[self.cursor];
+        if (c == ' ' or c == '\t') {
+            self.cursor += 1;
+        } else if (c == '\n') {
+            self.cursor += 1;
+            self.line += 1;
+        } else if (c == '\r' and self.cursor + 1 < self.input.len and
+            self.input[self.cursor + 1] == '\n')
+        {
+            self.cursor += 2;
+            self.line += 1;
+        } else {
+            return;
+        }
+    }
+
+    return self.fail(.{ .err = error.UnterminatedString });
 }
 
 /// Fail the parsing in the Scanner. This either fills the Diagnostics with
