@@ -27,8 +27,11 @@ diagnostics: ?*Diagnostics = null,
 const end_of_input: u8 = 0;
 
 const Error = Allocator.Error || error{
+    IntegerOverflow,
     InvalidControlCharacter,
+    InvalidDatetime,
     InvalidEscapeSequence,
+    InvalidInteger,
     UnexpectedToken,
     UnterminatedString,
     Reported,
@@ -627,11 +630,8 @@ fn scanLiteral(self: *Scanner) Error!Token {
 // `startsWith`?
 fn scanNonstringValue(self: *Scanner) Error!Token {
     assert(self.cursor < self.input.len);
-
-    const start = self.cursor;
-    const first = self.input[self.cursor];
-    _ = start;
-    _ = first;
+    assert(self.input[self.cursor] != '"');
+    assert(self.input[self.cursor] != '\'');
 
     if (std.mem.startsWith(u8, self.input[self.cursor..], "true")) {
         if (self.cursor + 4 >= self.input.len or isValueTerminator(self.input[self.cursor + 4])) {
@@ -685,7 +685,66 @@ fn scanNonstringValue(self: *Scanner) Error!Token {
         }
     }
 
+    if (self.cursor + 4 < self.input.len and std.ascii.isDigit(self.input[self.cursor]) and
+        std.ascii.isDigit(self.input[self.cursor + 1]) and
+        std.ascii.isDigit(self.input[self.cursor + 2]) and
+        std.ascii.isDigit(self.input[self.cursor + 3]) and self.input[self.cursor] == '-')
+    {
+        return self.scanDatetime();
+    }
+
     return self.fail(.{ .err = error.UnexpectedToken });
+}
+
+fn scanDatetime(self: *Scanner) Error!Token {
+    assert(self.cursor + 4 < self.input.len);
+    assert(std.ascii.isDigit(self.input[self.cursor]));
+
+    return .end_of_file;
+}
+
+fn readDate(self: *Scanner) Error!Date {
+    assert(self.cursor + 4 < self.input.len);
+    assert(std.ascii.isDigit(self.input[self.cursor]));
+}
+
+fn readDigits(self: *Scanner, comptime n: usize) Error!u32 {
+    if (n < 1) {
+        @compileError("number of digits must be greater than 0");
+    }
+
+    if (n > 10) {
+        @compileError("number of digits must be less than 11");
+    }
+
+    if (self.cursor + n > self.input.len) {
+        return self.fail(.{ .err = error.InvalidInteger });
+    }
+
+    var result: u32 = 0;
+    inline for (0..n) |_| {
+        const c = self.input[self.cursor];
+        if (!std.ascii.isDigit(c)) {
+            return self.fail(.{ .err = error.InvalidInteger });
+        }
+
+        const digit = c - '0';
+        var ov = @mulWithOverflow(result, 10);
+        if (ov[1] != 0) {
+            return self.fail(.{ .err = error.IntegerOverflow });
+        }
+
+        const p = ov[0];
+        ov = @addWithOverflow(p, digit);
+        if (ov[1] != 0) {
+            return self.fail(.{ .err = error.IntegerOverflow });
+        }
+
+        result = ov[0];
+        self.cursor += 1;
+    }
+
+    return result;
 }
 
 /// Skips the whitespace after a line-ending backslash in a multiline string.
@@ -716,8 +775,11 @@ fn skipLineEndingWhitespace(self: *Scanner) !void {
 fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null }) Error {
     if (self.diagnostics) |d| {
         const msg = if (opts.msg) |m| m else switch (opts.err) {
+            error.IntegerOverflow => "integer overflow",
             error.InvalidControlCharacter => "invalid control character",
+            error.InvalidDatetime => "invalid datetime",
             error.InvalidEscapeSequence => "invalid escape sequence",
+            error.InvalidInteger => "invalid datetime",
             error.UnexpectedToken => "unexpected token",
             error.UnterminatedString => "unterminated string",
             error.Reported => @panic("fail with error.Reported"),
@@ -1390,6 +1452,90 @@ test nextValue {
                     }
                 },
             }
+        }
+    }
+}
+
+test readDigits {
+    const cases = [_]struct {
+        input: []const u8,
+        expected: union(enum) {
+            err: error{ IntegerOverflow, InvalidInteger },
+            num: u32,
+        },
+    }{
+        .{
+            .input = "0",
+            .expected = .{ .num = 0 },
+        },
+        .{
+            .input = "1",
+            .expected = .{ .num = 1 },
+        },
+        .{
+            .input = "4",
+            .expected = .{ .num = 4 },
+        },
+        .{
+            .input = "10",
+            .expected = .{ .num = 10 },
+        },
+        .{
+            .input = "17",
+            .expected = .{ .num = 17 },
+        },
+        .{
+            .input = "100",
+            .expected = .{ .num = 100 },
+        },
+        .{
+            .input = "1000",
+            .expected = .{ .num = 1000 },
+        },
+        .{
+            .input = "1001",
+            .expected = .{ .num = 1001 },
+        },
+        .{
+            .input = "82305",
+            .expected = .{ .num = 82305 },
+        },
+        .{
+            .input = "4294967295",
+            .expected = .{ .num = std.math.maxInt(u32) },
+        },
+        .{
+            .input = "4294967296",
+            .expected = .{ .err = error.IntegerOverflow },
+        },
+        .{
+            .input = " ",
+            .expected = .{ .err = error.InvalidInteger },
+        },
+        .{
+            .input = "abcd",
+            .expected = .{ .err = error.InvalidInteger },
+        },
+        .{
+            .input = "0xFF",
+            .expected = .{ .err = error.InvalidInteger },
+        },
+    };
+
+    inline for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var scanner = init(allocator, std.testing.allocator, case.input, .{});
+
+        switch (case.expected) {
+            .err => |e| {
+                try std.testing.expectError(e, scanner.readDigits(case.input.len));
+            },
+            .num => |n| {
+                const actual = try scanner.readDigits(case.input.len);
+                try std.testing.expectEqual(n, actual);
+            },
         }
     }
 }
