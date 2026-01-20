@@ -154,7 +154,14 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
                 self.cursor -= 1;
                 return self.scanLiteralString();
             },
-            else => return .end_of_file, // TODO: Handle literals.
+            else => {
+                if (c <= 8 or (0x0a <= c and c <= 0x1f) or c == 0x7f) {
+                    return self.fail(.{ .err = error.InvalidControlCharacter });
+                }
+
+                self.cursor -= 1;
+                return if (key_mode) self.scanLiteral() else self.scanNonstringValue();
+            },
         }
     }
 
@@ -601,6 +608,26 @@ fn scanMultilineLiteralString(self: *Scanner) Error!Token {
     return self.fail(.{ .err = error.UnterminatedString });
 }
 
+fn scanLiteral(self: *Scanner) Error!Token {
+    const start = self.cursor;
+
+    while (self.cursor < self.input.len) {
+        const c = self.input[self.cursor];
+        if (std.ascii.isAlphanumeric(c) or c == '_' or c == '-') {
+            self.cursor += 1;
+        } else {
+            break;
+        }
+    }
+
+    return .{ .literal = self.input[start..self.cursor] };
+}
+
+fn scanNonstringValue(self: *Scanner) Error!Token {
+    _ = self;
+    return .end_of_file;
+}
+
 /// Skips the whitespace after a line-ending backslash in a multiline string.
 fn skipLineEndingWhitespace(self: *Scanner) !void {
     while (self.cursor < self.input.len) {
@@ -681,7 +708,10 @@ const TestToken = union(enum) {
     err: Error,
 };
 
-const next_test_cases = [_]struct { input: []const u8, seq: []const TestToken }{
+const NextScanTestCase = struct { input: []const u8, seq: []const TestToken };
+
+/// Common test cases for scanning with `nextKey` and `nextValue`.
+const next_test_cases = [_]NextScanTestCase{
     .{
         .input =
         \\
@@ -1002,6 +1032,68 @@ const next_test_cases = [_]struct { input: []const u8, seq: []const TestToken }{
     },
 };
 
+const next_key_test_cases = next_test_cases ++ [_]NextScanTestCase{
+    .{
+        .input =
+        \\literal
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .literal = "literal" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\[literal]
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .left_bracket,
+            .{ .literal = "literal" },
+            .right_bracket,
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\[[literal]]
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .double_left_bracket,
+            .{ .literal = "literal" },
+            .double_right_bracket,
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\[[literal]]
+        \\
+        \\[second-literal]
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .double_left_bracket,
+            .{ .literal = "literal" },
+            .double_right_bracket,
+            .line_feed,
+            .line_feed,
+            .left_bracket,
+            .{ .literal = "second-literal" },
+            .right_bracket,
+            .line_feed,
+            .end_of_file,
+        },
+    },
+};
+
+const next_value_test_cases = next_test_cases;
+
 fn convertUnion(source: anytype, comptime Dest: type) Dest {
     if (!builtin.is_test) {
         @compileError("convertUnion may only be used in tests");
@@ -1046,7 +1138,7 @@ fn testNextValue(self: *Scanner) Error!TestToken {
 }
 
 test nextKey {
-    for (next_test_cases) |case| {
+    for (next_key_test_cases) |case| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -1060,13 +1152,20 @@ test nextKey {
                 else => {
                     const actual = try scanner.testNextKey();
                     switch (actual) {
+                        .literal => |actual_str| {
+                            try std.testing.expect(expected == .literal);
+                            try std.testing.expectEqualStrings(expected.literal, actual_str);
+                        },
                         .string => |actual_str| {
                             try std.testing.expect(expected == .string);
                             try std.testing.expectEqualStrings(expected.string, actual_str);
                         },
                         .multiline_string => |actual_str| {
                             try std.testing.expect(expected == .multiline_string);
-                            try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
+                            try std.testing.expectEqualStrings(
+                                expected.multiline_string,
+                                actual_str,
+                            );
                         },
                         .literal_string => |actual_str| {
                             try std.testing.expect(expected == .literal_string);
@@ -1088,7 +1187,7 @@ test nextKey {
 }
 
 test nextValue {
-    for (next_test_cases) |case| {
+    for (next_value_test_cases) |case| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
