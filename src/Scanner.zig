@@ -623,7 +623,68 @@ fn scanLiteral(self: *Scanner) Error!Token {
     return .{ .literal = self.input[start..self.cursor] };
 }
 
+// TODO: Could we simplify the comparison---now there are multiple instances of
+// `startsWith`?
 fn scanNonstringValue(self: *Scanner) Error!Token {
+    assert(self.cursor < self.input.len);
+
+    const start = self.cursor;
+    const first = self.input[self.cursor];
+    _ = start;
+    _ = first;
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "true")) {
+        if (self.cursor + 4 >= self.input.len or isValueTerminator(self.input[self.cursor + 4])) {
+            self.cursor += 4;
+            return .{ .bool = true };
+        }
+    }
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "false")) {
+        if (self.cursor + 5 >= self.input.len or isValueTerminator(self.input[self.cursor + 5])) {
+            self.cursor += 5;
+            return .{ .bool = false };
+        }
+    }
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "inf") or
+        std.mem.startsWith(u8, self.input[self.cursor..], "+inf"))
+    {
+        const len: usize = if (self.input[self.cursor] == '+') 4 else 3;
+        if (self.cursor + len >= self.input.len or
+            isValueTerminator(self.input[self.cursor + len]))
+        {
+            self.cursor += len;
+            return .{ .float = std.math.inf(f64) };
+        }
+    }
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "-inf")) {
+        if (self.cursor + 4 >= self.input.len or isValueTerminator(self.input[self.cursor + 4])) {
+            self.cursor += 4;
+            return .{ .float = -std.math.inf(f64) };
+        }
+    }
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "nan") or
+        std.mem.startsWith(u8, self.input[self.cursor..], "+nan"))
+    {
+        const len: usize = if (self.input[self.cursor] == '+') 4 else 3;
+        if (self.cursor + len >= self.input.len or
+            isValueTerminator(self.input[self.cursor + len]))
+        {
+            self.cursor += len;
+            return .{ .float = std.math.nan(f64) };
+        }
+    }
+
+    if (std.mem.startsWith(u8, self.input[self.cursor..], "-nan")) {
+        if (self.cursor + 4 >= self.input.len or isValueTerminator(self.input[self.cursor + 4])) {
+            self.cursor += 4;
+            return .{ .float = -std.math.nan(f64) };
+        }
+    }
+
     return self.fail(.{ .err = error.UnexpectedToken });
 }
 
@@ -675,6 +736,10 @@ fn isValidChar(c: u8) bool {
     return std.ascii.isPrint(c) or (c & 0x80) != 0;
 }
 
+fn isValueTerminator(c: u8) bool {
+    return std.mem.indexOfScalar(u8, "# \r\n\t,}]", c) != null;
+}
+
 const TestToken = union(enum) {
     dot,
     equal,
@@ -707,10 +772,10 @@ const TestToken = union(enum) {
     err: Error,
 };
 
-const NextScanTestCase = struct { input: []const u8, seq: []const TestToken };
+const NextTestCase = struct { input: []const u8, seq: []const TestToken };
 
 /// Common test cases for scanning with `nextKey` and `nextValue`.
-const next_test_cases = [_]NextScanTestCase{
+const next_test_cases = [_]NextTestCase{
     .{
         .input =
         \\
@@ -1031,7 +1096,7 @@ const next_test_cases = [_]NextScanTestCase{
     },
 };
 
-const next_key_test_cases = next_test_cases ++ [_]NextScanTestCase{
+const next_key_test_cases = next_test_cases ++ [_]NextTestCase{
     .{
         .input =
         \\literal
@@ -1091,7 +1156,109 @@ const next_key_test_cases = next_test_cases ++ [_]NextScanTestCase{
     },
 };
 
-const next_value_test_cases = next_test_cases;
+const next_value_test_cases = next_test_cases ++ [_]NextTestCase{
+    .{
+        .input =
+        \\true
+        ,
+        .seq = &[_]TestToken{
+            .{ .bool = true },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\true
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .bool = true },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\false
+        ,
+        .seq = &[_]TestToken{
+            .{ .bool = false },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\false
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .bool = false },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\inf
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = std.math.inf(f64) },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\inf
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = std.math.inf(f64) },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\+inf
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = std.math.inf(f64) },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\+inf
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = std.math.inf(f64) },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\-inf
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = -std.math.inf(f64) },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\-inf
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = -std.math.inf(f64) },
+            .end_of_file,
+        },
+    },
+    // TODO: Devise a way to check the NaNs.
+};
 
 fn convertUnion(source: anytype, comptime Dest: type) Dest {
     if (!builtin.is_test) {
