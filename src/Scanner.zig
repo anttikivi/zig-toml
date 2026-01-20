@@ -345,16 +345,15 @@ fn scanMultilineString(self: *Scanner) !Token {
 
     const start = self.cursor;
 
-    // TODO: Force upper limit on loops.
     while (self.cursor < self.input.len) {
         var c = self.input[self.cursor];
 
         if (c == '"') {
             var i: usize = 0;
 
-            while (self.cursor + i < self.input.len and
-                self.input[self.cursor + i] == '"') : (i += 1)
-            {}
+            while (self.cursor + i < self.input.len and self.input[self.cursor + i] == '"') {
+                i += 1;
+            }
 
             if (i >= 3) {
                 if (i > 5) {
@@ -367,6 +366,10 @@ fn scanMultilineString(self: *Scanner) !Token {
                 const extra = i - 3;
                 const result = self.input[start .. self.cursor + extra];
                 self.cursor += i;
+
+                assert(!std.mem.startsWith(u8, result, "\"\"\""));
+                assert(!std.mem.endsWith(u8, result, "\"\"\""));
+
                 return .{ .multiline_string = result };
             } else {
                 self.cursor += i; // eat the non-closing quotes
@@ -504,8 +507,7 @@ fn scanLiteralString(self: *Scanner) Error!Token {
     assert(self.peek() == '\'');
 
     if (self.matchN('\'', 3)) {
-        // TODO: Handle multiline literal strings.
-        return .end_of_file;
+        return self.scanMultilineLiteralString();
     }
 
     _ = self.nextChar();
@@ -533,6 +535,70 @@ fn scanLiteralString(self: *Scanner) Error!Token {
     self.cursor += 1;
 
     return .{ .literal_string = result };
+}
+
+fn scanMultilineLiteralString(self: *Scanner) Error!Token {
+    assert(self.matchN('\'', 3));
+
+    self.cursor += 3;
+
+    if (self.cursor < self.input.len and self.input[self.cursor] == '\n') {
+        self.cursor += 1;
+        self.line += 1;
+    } else if (self.cursor + 1 < self.input.len and
+        self.input[self.cursor] == '\r' and
+        self.input[self.cursor + 1] == '\n')
+    {
+        self.cursor += 2;
+        self.line += 1;
+    }
+
+    const start = self.cursor;
+
+    while (self.cursor < self.input.len) {
+        const c = self.input[self.cursor];
+
+        if (c == '\'') {
+            var i: usize = 0;
+            while (self.cursor < self.input.len and self.input[self.cursor + i] == '\'') {
+                i += 1;
+            }
+
+            if (i >= 3) {
+                if (i > 5) {
+                    return self.fail(.{
+                        .err = error.UnexpectedToken,
+                        .msg = "invalid closing quotes",
+                    });
+                }
+
+                const extra = i - 3;
+                const result = self.input[start .. self.cursor + extra];
+                self.cursor += i;
+
+                assert(!std.mem.startsWith(u8, result, "'''"));
+                assert(!std.mem.endsWith(u8, result, "'''"));
+
+                return .{ .multiline_literal_string = result };
+            } else {
+                self.cursor += i;
+            }
+        } else if (c == '\n') {
+            self.cursor += 1;
+            self.line += 1;
+        } else if (c == '\r' and self.cursor + 1 < self.input.len and
+            self.input[self.cursor + 1] == '\n')
+        {
+            self.cursor += 2;
+            self.line += 1;
+        } else if (isValidChar(c) or c == ' ' or c == '\t') {
+            self.cursor += 1;
+        } else {
+            return self.fail(.{ .err = error.InvalidEscapeSequence });
+        }
+    }
+
+    return self.fail(.{ .err = error.UnterminatedString });
 }
 
 /// Skips the whitespace after a line-ending backslash in a multiline string.
@@ -860,6 +926,80 @@ const next_test_cases = [_]struct { input: []const u8, seq: []const TestToken }{
             .end_of_file,
         },
     },
+    .{
+        .input =
+        \\'''This is a
+        \\   multiline string
+        \\'''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "This is a\n   multiline string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'''This is a ''multiline string'''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "This is a ''multiline string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'''This is a ''multiline string'''''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "This is a ''multiline string''" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'''This is \\a multiline string'''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "This is \\\\a multiline string" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'''
+        \\This is a
+        \\   multiline string
+        \\'''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "This is a\n   multiline string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\'''
+        \\  This is a
+        \\   multiline string
+        \\'''
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .multiline_literal_string = "  This is a\n   multiline string\n" },
+            .line_feed,
+            .end_of_file,
+        },
+    },
 };
 
 fn convertUnion(source: anytype, comptime Dest: type) Dest {
@@ -932,6 +1072,13 @@ test nextKey {
                             try std.testing.expect(expected == .literal_string);
                             try std.testing.expectEqualStrings(expected.literal_string, actual_str);
                         },
+                        .multiline_literal_string => |actual_str| {
+                            try std.testing.expect(expected == .multiline_literal_string);
+                            try std.testing.expectEqualStrings(
+                                expected.multiline_literal_string,
+                                actual_str,
+                            );
+                        },
                         else => try std.testing.expectEqual(expected, actual),
                     }
                 },
@@ -966,6 +1113,13 @@ test nextValue {
                         .literal_string => |actual_str| {
                             try std.testing.expect(expected == .literal_string);
                             try std.testing.expectEqualStrings(expected.literal_string, actual_str);
+                        },
+                        .multiline_literal_string => |actual_str| {
+                            try std.testing.expect(expected == .multiline_literal_string);
+                            try std.testing.expectEqualStrings(
+                                expected.multiline_literal_string,
+                                actual_str,
+                            );
                         },
                         else => try std.testing.expectEqual(expected, actual),
                     }
