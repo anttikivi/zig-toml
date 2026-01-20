@@ -708,6 +708,8 @@ fn readDate(self: *Scanner) Error!Date {
     assert(std.ascii.isDigit(self.input[self.cursor]));
 }
 
+// TODO: See about restricting n to a smaller number and getting rid of
+// the overflow checks.
 fn readDigits(self: *Scanner, comptime n: usize) Error!u32 {
     if (n < 1) {
         @compileError("number of digits must be greater than 0");
