@@ -624,8 +624,7 @@ fn scanLiteral(self: *Scanner) Error!Token {
 }
 
 fn scanNonstringValue(self: *Scanner) Error!Token {
-    _ = self;
-    return .end_of_file;
+    return self.fail(.{ .err = error.UnexpectedToken });
 }
 
 /// Skips the whitespace after a line-ending backslash in a multiline string.
