@@ -685,12 +685,22 @@ fn scanNonstringValue(self: *Scanner) Error!Token {
         }
     }
 
-    if (self.cursor + 4 < self.input.len and std.ascii.isDigit(self.input[self.cursor]) and
+    if (self.cursor + 4 < self.input.len and
+        std.ascii.isDigit(self.input[self.cursor]) and
         std.ascii.isDigit(self.input[self.cursor + 1]) and
         std.ascii.isDigit(self.input[self.cursor + 2]) and
-        std.ascii.isDigit(self.input[self.cursor + 3]) and self.input[self.cursor] == '-')
+        std.ascii.isDigit(self.input[self.cursor + 3]) and
+        self.input[self.cursor + 4] == '-')
     {
         return self.scanDatetime();
+    }
+
+    if (self.cursor + 2 < self.input.len and
+        std.ascii.isDigit(self.input[self.cursor]) and
+        std.ascii.isDigit(self.input[self.cursor + 1]) and
+        self.input[self.cursor + 2] == ':')
+    {
+        return self.scanLocalTime();
     }
 
     return self.fail(.{ .err = error.UnexpectedToken });
@@ -700,51 +710,236 @@ fn scanDatetime(self: *Scanner) Error!Token {
     assert(self.cursor + 4 < self.input.len);
     assert(std.ascii.isDigit(self.input[self.cursor]));
 
-    return .end_of_file;
+    const date = try self.readDate();
+
+    if (self.cursor >= self.input.len) {
+        return .{ .local_date = date };
+    }
+
+    const c = self.input[self.cursor];
+    if (c != 'T' and c != 't' and c != ' ') {
+        return .{ .local_date = date };
+    }
+
+    if (self.cursor + 3 >= self.input.len or
+        !std.ascii.isDigit(self.input[self.cursor + 1]) or
+        !std.ascii.isDigit(self.input[self.cursor + 2]) or
+        self.input[self.cursor + 3] != ':')
+    {
+        return .{ .local_date = date };
+    }
+
+    self.cursor += 1;
+
+    const time = try self.readTime(false);
+    const dt: Datetime = .{
+        .year = date.year,
+        .month = date.month,
+        .day = date.day,
+        .hour = time.hour,
+        .minute = time.minute,
+        .second = time.second,
+        .nano = time.nano,
+        .tz = if (self.cursor >= self.input.len) null else try self.readTimezone(),
+    };
+
+    if (!dt.isValid()) {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    return if (dt.tz == null) .{ .local_datetime = dt } else .{ .datetime = dt };
+}
+
+fn scanLocalTime(self: *Scanner) Error!Token {
+    assert(self.cursor + 2 < self.input.len);
+    assert(std.ascii.isDigit(self.input[self.cursor]));
+    assert(std.ascii.isDigit(self.input[self.cursor + 1]));
+    assert(self.input[self.cursor + 2] == ':');
+
+    const t = try self.readTime(true);
+
+    assert(t.isValid());
+
+    return .{ .local_time = t };
 }
 
 fn readDate(self: *Scanner) Error!Date {
     assert(self.cursor + 4 < self.input.len);
     assert(std.ascii.isDigit(self.input[self.cursor]));
-}
 
-// TODO: See about restricting n to a smaller number and getting rid of
-// the overflow checks.
-fn readDigits(self: *Scanner, comptime n: usize) Error!u32 {
-    if (n < 1) {
-        @compileError("number of digits must be greater than 0");
+    // TODO: See if `readDigits` can be streamlined and the numbers read
+    // straight into the correct types.
+    const year = try self.readDigits(u16, 4);
+
+    if (self.cursor >= self.input.len or self.input[self.cursor] != '-') {
+        return self.fail(.{ .err = error.InvalidDatetime });
     }
 
-    if (n > 10) {
-        @compileError("number of digits must be less than 11");
+    self.cursor += 1;
+
+    const month = try self.readDigits(u8, 2);
+
+    if (self.cursor >= self.input.len or self.input[self.cursor] != '-') {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    self.cursor += 1;
+
+    const day = try self.readDigits(u8, 2);
+
+    const result: Date = .{
+        .year = year,
+        .month = month,
+        .day = day,
+    };
+    if (!result.isValid()) {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    return result;
+}
+
+fn readTime(self: *Scanner, comptime local_time: bool) Error!Time {
+    assert(self.cursor + 1 < self.input.len);
+    assert(std.ascii.isDigit(self.input[self.cursor]));
+    assert(std.ascii.isDigit(self.input[self.cursor + 1]));
+
+    const hour = try self.readDigits(u8, 2);
+
+    if (self.cursor >= self.input.len or self.input[self.cursor] != ':') {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    self.cursor += 1;
+
+    const minute = try self.readDigits(u8, 2);
+
+    var second: u8 = 0;
+    var seconds_read = false;
+    if (self.cursor < self.input.len and self.input[self.cursor] == ':') {
+        self.cursor += 1;
+        second = try self.readDigits(u8, 2);
+        seconds_read = true;
+    } else if (!self.features.optional_seconds or !local_time) {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    var nano: ?u32 = null;
+    if (self.cursor < self.input.len and self.input[self.cursor] == '.') {
+        if (!seconds_read) {
+            return self.fail(.{ .err = error.InvalidDatetime });
+        }
+
+        self.cursor += 1;
+
+        if (self.cursor >= self.input.len or !std.ascii.isDigit(self.input[self.cursor])) {
+            return self.fail(.{ .err = error.InvalidDatetime });
+        }
+
+        var n: u32 = 0;
+        var i: usize = 0;
+        while (self.cursor < self.input.len and
+            std.ascii.isDigit(self.input[self.cursor]) and
+            i < 9) : (i += 1)
+        {
+            n = n * 10 + (self.input[self.cursor] - '0');
+            self.cursor += 1;
+        }
+
+        while (i < 9) : (i += 1) {
+            n *= 10;
+        }
+
+        nano = n;
+    }
+
+    const time: Time = .{ .hour = hour, .minute = minute, .second = second, .nano = nano };
+
+    if (!time.isValid()) {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    return time;
+}
+
+fn readTimezone(self: *Scanner) Error!?i16 {
+    assert(self.cursor < self.input.len);
+
+    const c = self.input[self.cursor];
+    if (c == 'Z' or c == 'z') {
+        self.cursor += 1;
+        return 0;
+    }
+
+    if (c != '+' and c != '-') {
+        return null;
+    }
+
+    const sign: i16 = if (c == '-') -1 else 1;
+    self.cursor += 1;
+
+    const hour = @as(i16, try self.readDigits(u8, 2));
+
+    if (self.cursor >= self.input.len or self.input[self.cursor] != ':') {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    self.cursor += 1;
+
+    const minute = @as(i16, try self.readDigits(u8, 2));
+
+    if (hour > 23 or minute > 59) {
+        return self.fail(.{ .err = error.InvalidDatetime });
+    }
+
+    return sign * (hour * 60 + minute);
+}
+
+fn readDigits(self: *Scanner, comptime T: type, comptime n: usize) Error!T {
+    comptime {
+        if (n < 1) {
+            @compileError("number of digits must be greater than 0");
+        }
+
+        const info = @typeInfo(T);
+        if (info != .int or info.int.signedness != .unsigned) {
+            @compileError("readDigits requires an unsigned integer type");
+        }
+
+        const max_digits = switch (T) {
+            u8 => 2,
+            u16 => 4,
+            u32 => 9,
+            else => @compileError("readDigits requires u8, u16, or u32"),
+        };
+
+        if (n > max_digits) {
+            @compileError(std.fmt.comptimePrint(
+                "{s} is too small for {d} digits",
+                .{
+                    @typeName(T),
+                    n,
+                },
+            ));
+        }
     }
 
     if (self.cursor + n > self.input.len) {
         return self.fail(.{ .err = error.InvalidInteger });
     }
 
-    var result: u32 = 0;
+    var result: T = 0;
     inline for (0..n) |_| {
         const c = self.input[self.cursor];
         if (!std.ascii.isDigit(c)) {
             return self.fail(.{ .err = error.InvalidInteger });
         }
 
-        const digit = c - '0';
-        var ov = @mulWithOverflow(result, 10);
-        if (ov[1] != 0) {
-            return self.fail(.{ .err = error.IntegerOverflow });
-        }
-
-        const p = ov[0];
-        ov = @addWithOverflow(p, digit);
-        if (ov[1] != 0) {
-            return self.fail(.{ .err = error.IntegerOverflow });
-        }
-
-        result = ov[0];
+        result = result * 10 + @as(T, c - '0');
         self.cursor += 1;
     }
+
+    assert(result <= std.math.pow(u64, 10, n) - 1);
 
     return result;
 }
@@ -836,7 +1031,7 @@ const TestToken = union(enum) {
     @"error": Error,
 };
 
-const NextTestCase = struct { input: []const u8, seq: []const TestToken };
+const NextTestCase = struct { disabled: bool = false, input: []const u8, seq: []const TestToken };
 
 /// Common test cases for scanning with `nextKey` and `nextValue`.
 const next_test_cases = [_]NextTestCase{
@@ -1263,6 +1458,403 @@ const next_value_test_cases = next_test_cases ++ [_]NextTestCase{
     },
     .{
         .input =
+        \\1979-05-27T07:32:00Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32:00.123456789Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32:00-07:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = -7 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32:00.123456789+11:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 11 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27t07:32:00Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27t07:32:00.123456789Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27t07:32:00-07:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = -7 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27t07:32:00.123456789+11:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 11 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27 07:32:00Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27 07:32:00.123456789Z
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 0,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27 07:32:00-07:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = -7 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27 07:32:00.123456789+11:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = 11 * 60,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32:00
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = null,
+                    .tz = null,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32:00.123456789
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_datetime = .{
+                    .year = 1979,
+                    .month = 5,
+                    .day = 27,
+                    .hour = 7,
+                    .minute = 32,
+                    .second = 0,
+                    .nano = 123456789,
+                    .tz = null,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\2001-04-12
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_date = .{
+                    .year = 2001,
+                    .month = 4,
+                    .day = 12,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\13:24:18.123456789
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_time = .{
+                    .hour = 13,
+                    .minute = 24,
+                    .second = 18,
+                    .nano = 123456789,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\13:24:18
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_time = .{
+                    .hour = 13,
+                    .minute = 24,
+                    .second = 18,
+                    .nano = null,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\18:12
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{
+                .local_time = .{
+                    .hour = 18,
+                    .minute = 12,
+                    .second = 0,
+                    .nano = null,
+                },
+            },
+            .line_feed,
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\18:12.123456789
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidDatetime },
+        },
+    },
+    .{
+        .input =
+        \\1979-05-27T07:32
+        \\
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidDatetime },
+        },
+    },
+    .{
+        .input =
         \\inf
         \\
         ,
@@ -1368,7 +1960,11 @@ fn testNextValue(self: *Scanner) Error!TestToken {
 }
 
 fn runNextKeyValueTests(test_cases: anytype, comptime key_mode: bool) !void {
-    inline for (test_cases) |case| {
+    for (test_cases) |case| {
+        if (case.disabled) {
+            continue;
+        }
+
         var scanner = init(std.testing.allocator, case.input, .{});
 
         for (case.seq) |expected| {
@@ -1412,7 +2008,25 @@ fn runNextKeyValueTests(test_cases: anytype, comptime key_mode: bool) !void {
                                 actual_str,
                             );
                         },
-                        else => try std.testing.expectEqual(expected, actual),
+                        .datetime => |actual_dt| {
+                            try std.testing.expect(expected == .datetime);
+                            try std.testing.expectEqual(expected.datetime, actual_dt);
+                        },
+                        .local_datetime => |actual_dt| {
+                            try std.testing.expect(expected == .local_datetime);
+                            try std.testing.expectEqual(expected.local_datetime, actual_dt);
+                        },
+                        .local_date => |actual_dt| {
+                            try std.testing.expect(expected == .local_date);
+                            try std.testing.expectEqual(expected.local_date, actual_dt);
+                        },
+                        .local_time => |actual_dt| {
+                            try std.testing.expect(expected == .local_time);
+                            try std.testing.expectEqual(expected.local_time, actual_dt);
+                        },
+                        else => {
+                            try std.testing.expectEqual(expected, actual);
+                        },
                     }
                 },
             }
@@ -1429,85 +2043,108 @@ test nextValue {
 }
 
 test readDigits {
-    const cases = [_]struct {
-        input: []const u8,
-        expected: union(enum) {
-            err: error{ IntegerOverflow, InvalidInteger },
-            num: u32,
-        },
-    }{
-        .{
-            .input = "0",
-            .expected = .{ .num = 0 },
-        },
-        .{
-            .input = "1",
-            .expected = .{ .num = 1 },
-        },
-        .{
-            .input = "4",
-            .expected = .{ .num = 4 },
-        },
-        .{
-            .input = "10",
-            .expected = .{ .num = 10 },
-        },
-        .{
-            .input = "17",
-            .expected = .{ .num = 17 },
-        },
-        .{
-            .input = "100",
-            .expected = .{ .num = 100 },
-        },
-        .{
-            .input = "1000",
-            .expected = .{ .num = 1000 },
-        },
-        .{
-            .input = "1001",
-            .expected = .{ .num = 1001 },
-        },
-        .{
-            .input = "82305",
-            .expected = .{ .num = 82305 },
-        },
-        .{
-            .input = "4294967295",
-            .expected = .{ .num = std.math.maxInt(u32) },
-        },
-        .{
-            .input = "4294967296",
-            .expected = .{ .err = error.IntegerOverflow },
-        },
-        .{
-            .input = " ",
-            .expected = .{ .err = error.InvalidInteger },
-        },
-        .{
-            .input = "abcd",
-            .expected = .{ .err = error.InvalidInteger },
-        },
-        .{
-            .input = "0xFF",
-            .expected = .{ .err = error.InvalidInteger },
-        },
-    };
-
-    inline for (cases) |case| {
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
-        var scanner = init(allocator, std.testing.allocator, case.input, .{});
-
-        switch (case.expected) {
-            .err => |e| {
-                try std.testing.expectError(e, scanner.readDigits(case.input.len));
-            },
-            .num => |n| {
-                const actual = try scanner.readDigits(case.input.len);
-                try std.testing.expectEqual(n, actual);
-            },
-        }
+    {
+        var s = Scanner.init(std.testing.allocator, "0", .{});
+        try std.testing.expectEqual(0, try s.readDigits(u8, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "0", .{});
+        try std.testing.expectEqual(0, try s.readDigits(u16, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "0", .{});
+        try std.testing.expectEqual(0, try s.readDigits(u32, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1", .{});
+        try std.testing.expectEqual(1, try s.readDigits(u8, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1", .{});
+        try std.testing.expectEqual(1, try s.readDigits(u16, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1", .{});
+        try std.testing.expectEqual(1, try s.readDigits(u32, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "4", .{});
+        try std.testing.expectEqual(4, try s.readDigits(u8, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "4", .{});
+        try std.testing.expectEqual(4, try s.readDigits(u16, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "4", .{});
+        try std.testing.expectEqual(4, try s.readDigits(u32, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "10", .{});
+        try std.testing.expectEqual(10, try s.readDigits(u8, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "10", .{});
+        try std.testing.expectEqual(10, try s.readDigits(u16, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "10", .{});
+        try std.testing.expectEqual(10, try s.readDigits(u32, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "13", .{});
+        try std.testing.expectEqual(13, try s.readDigits(u8, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "13", .{});
+        try std.testing.expectEqual(13, try s.readDigits(u16, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "13", .{});
+        try std.testing.expectEqual(13, try s.readDigits(u32, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "123", .{});
+        try std.testing.expectEqual(123, try s.readDigits(u16, 3));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "123", .{});
+        try std.testing.expectEqual(123, try s.readDigits(u32, 3));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1000", .{});
+        try std.testing.expectEqual(1000, try s.readDigits(u16, 4));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1000", .{});
+        try std.testing.expectEqual(1000, try s.readDigits(u32, 4));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "82305", .{});
+        try std.testing.expectEqual(82305, try s.readDigits(u32, 5));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "100000000", .{});
+        try std.testing.expectEqual(100000000, try s.readDigits(u32, 9));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "0", .{});
+        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "1", .{});
+        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 2));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, " ", .{});
+        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "abcd", .{});
+        try std.testing.expectError(error.InvalidInteger, s.readDigits(u16, 4));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "0xFF", .{});
+        try std.testing.expectError(error.InvalidInteger, s.readDigits(u32, 4));
     }
 }
