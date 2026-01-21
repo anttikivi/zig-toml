@@ -833,7 +833,7 @@ const TestToken = union(enum) {
     line_feed,
     end_of_file,
 
-    err: Error,
+    @"error": Error,
 };
 
 const NextTestCase = struct { input: []const u8, seq: []const TestToken };
@@ -895,7 +895,7 @@ const next_test_cases = [_]NextTestCase{
         \\"This is a string
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.UnterminatedString }},
+        .seq = &[_]TestToken{.{ .@"error" = error.UnterminatedString }},
     },
     .{
         .input =
@@ -913,7 +913,7 @@ const next_test_cases = [_]NextTestCase{
         \\"This is \uFFF a string"
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+        .seq = &[_]TestToken{.{ .@"error" = error.InvalidEscapeSequence }},
     },
     .{
         .input =
@@ -948,7 +948,7 @@ const next_test_cases = [_]NextTestCase{
         \\"""
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+        .seq = &[_]TestToken{.{ .@"error" = error.InvalidEscapeSequence }},
     },
     .{
         .input =
@@ -970,7 +970,7 @@ const next_test_cases = [_]NextTestCase{
         \\"""
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+        .seq = &[_]TestToken{.{ .@"error" = error.InvalidEscapeSequence }},
     },
     .{
         .input =
@@ -992,7 +992,7 @@ const next_test_cases = [_]NextTestCase{
         \\"""
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+        .seq = &[_]TestToken{.{ .@"error" = error.InvalidEscapeSequence }},
     },
     .{
         .input =
@@ -1001,7 +1001,7 @@ const next_test_cases = [_]NextTestCase{
         \\"""
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.InvalidEscapeSequence }},
+        .seq = &[_]TestToken{.{ .@"error" = error.InvalidEscapeSequence }},
     },
     .{
         .input =
@@ -1021,7 +1021,7 @@ const next_test_cases = [_]NextTestCase{
         \\This is a multiline string""
         \\
         ,
-        .seq = &[_]TestToken{.{ .err = error.UnterminatedString }},
+        .seq = &[_]TestToken{.{ .@"error" = error.UnterminatedString }},
     },
     .{
         .input =
@@ -1367,17 +1367,24 @@ fn testNextValue(self: *Scanner) Error!TestToken {
     return convertUnion(result, TestToken);
 }
 
-test nextKey {
-    for (next_key_test_cases) |case| {
+fn runNextKeyValueTests(test_cases: anytype, comptime key_mode: bool) !void {
+    inline for (test_cases) |case| {
         var scanner = init(std.testing.allocator, case.input, .{});
 
         for (case.seq) |expected| {
             switch (expected) {
-                .err => |e| {
-                    try std.testing.expectError(e, scanner.testNextKey());
+                .@"error" => |err| {
+                    try std.testing.expectError(
+                        err,
+                        if (key_mode) scanner.testNextKey() else scanner.testNextValue(),
+                    );
                 },
                 else => {
-                    const actual = try scanner.testNextKey();
+                    const actual = try if (key_mode) blk: {
+                        break :blk scanner.testNextKey();
+                    } else blk: {
+                        break :blk scanner.testNextValue();
+                    };
                     switch (actual) {
                         .literal => |actual_str| {
                             try std.testing.expect(expected == .literal);
@@ -1413,43 +1420,12 @@ test nextKey {
     }
 }
 
-test nextValue {
-    for (next_value_test_cases) |case| {
-        var scanner = init(std.testing.allocator, case.input, .{});
+test nextKey {
+    try runNextKeyValueTests(next_key_test_cases, true);
+}
 
-        for (case.seq) |expected| {
-            switch (expected) {
-                .err => |e| {
-                    try std.testing.expectError(e, scanner.testNextValue());
-                },
-                else => {
-                    const actual = try scanner.testNextValue();
-                    switch (actual) {
-                        .string => |actual_str| {
-                            try std.testing.expect(expected == .string);
-                            try std.testing.expectEqualStrings(expected.string, actual_str);
-                        },
-                        .multiline_string => |actual_str| {
-                            try std.testing.expect(expected == .multiline_string);
-                            try std.testing.expectEqualStrings(expected.multiline_string, actual_str);
-                        },
-                        .literal_string => |actual_str| {
-                            try std.testing.expect(expected == .literal_string);
-                            try std.testing.expectEqualStrings(expected.literal_string, actual_str);
-                        },
-                        .multiline_literal_string => |actual_str| {
-                            try std.testing.expect(expected == .multiline_literal_string);
-                            try std.testing.expectEqualStrings(
-                                expected.multiline_literal_string,
-                                actual_str,
-                            );
-                        },
-                        else => try std.testing.expectEqual(expected, actual),
-                    }
-                },
-            }
-        }
-    }
+test nextValue {
+    try runNextKeyValueTests(next_value_test_cases, false);
 }
 
 test readDigits {
