@@ -41,6 +41,7 @@ const Error = Allocator.Error || error{
 const Features = packed struct {
     escape_e: bool = false,
     escape_xhh: bool = false,
+    optional_seconds: bool = false,
 
     fn init(toml_version: TomlVersion) @This() {
         return switch (toml_version) {
@@ -48,6 +49,7 @@ const Features = packed struct {
             .@"1.1.0" => .{
                 .escape_e = true,
                 .escape_xhh = true,
+                .optional_seconds = true,
             },
         };
     }
