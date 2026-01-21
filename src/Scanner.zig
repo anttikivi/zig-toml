@@ -13,7 +13,6 @@ const Date = @import("value.zig").Date;
 const Time = @import("value.zig").Time;
 
 features: Features,
-arena: Allocator,
 
 /// The general-purpose allocator used to create the parsing arena. Here it is
 /// used for allocating the diagnostics message if the decoding fails.
@@ -84,10 +83,9 @@ const Token = union(enum) {
     end_of_file,
 };
 
-pub fn init(arena: Allocator, gpa: Allocator, input: []const u8, opts: DecodeOptions) Scanner {
+pub fn init(gpa: Allocator, input: []const u8, opts: DecodeOptions) Scanner {
     return .{
         .features = Features.init(opts.toml_version),
-        .arena = arena,
         .gpa = gpa,
         .input = input,
         .diagnostics = opts.diagnostics,
@@ -1369,10 +1367,7 @@ fn testNextValue(self: *Scanner) Error!TestToken {
 
 test nextKey {
     for (next_key_test_cases) |case| {
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
-        var scanner = init(allocator, std.testing.allocator, case.input, .{});
+        var scanner = init(std.testing.allocator, case.input, .{});
 
         for (case.seq) |expected| {
             switch (expected) {
@@ -1418,10 +1413,7 @@ test nextKey {
 
 test nextValue {
     for (next_value_test_cases) |case| {
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena.deinit();
-        const allocator = arena.allocator();
-        var scanner = init(allocator, std.testing.allocator, case.input, .{});
+        var scanner = init(std.testing.allocator, case.input, .{});
 
         for (case.seq) |expected| {
             switch (expected) {

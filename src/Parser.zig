@@ -16,7 +16,7 @@ const ParsingTable = struct {};
 pub fn init(arena: Allocator, gpa: Allocator, input: []const u8, opts: DecodeOptions) Parser {
     return .{
         .arena = arena,
-        .scanner = Scanner.init(arena, gpa, input, opts),
+        .scanner = Scanner.init(gpa, input, opts),
     };
 }
 
