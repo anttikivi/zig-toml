@@ -22,9 +22,6 @@ cursor: usize = 0,
 line: usize = 1,
 diagnostics: ?*Diagnostics = null,
 
-/// Sentinel character that marks the end of input.
-const end_of_input: u8 = 0;
-
 const Error = Allocator.Error || error{
     IntegerOverflow,
     InvalidControlCharacter,
@@ -131,7 +128,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
             '=' => return .equal,
             ',' => return .comma,
             '[' => {
-                if (key_mode and self.peek() == '[') {
+                if (key_mode and self.cursor < self.input.len and self.input[self.cursor] == '[') {
                     _ = self.nextChar();
                     return .double_left_bracket;
                 }
@@ -139,7 +136,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
                 return .left_bracket;
             },
             ']' => {
-                if (key_mode and self.peek() == ']') {
+                if (key_mode and self.cursor < self.input.len and self.input[self.cursor] == ']') {
                     _ = self.nextChar();
                     return .double_right_bracket;
                 }
@@ -174,9 +171,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
 /// Moves the Scanner to the next position and returns the valid, read
 /// character.
 fn nextChar(self: *Scanner) u8 {
-    if (self.cursor >= self.input.len) {
-        return end_of_input;
-    }
+    assert(self.cursor < self.input.len);
 
     var c = self.input[self.cursor];
     self.cursor += 1;
@@ -192,17 +187,6 @@ fn nextChar(self: *Scanner) u8 {
     }
 
     return c;
-}
-
-/// Take a look at the next character without advancing.
-fn peek(self: *const Scanner) u8 {
-    if (self.cursor >= self.input.len) {
-        return end_of_input;
-    }
-
-    assert(self.input[self.cursor] != end_of_input);
-
-    return self.input[self.cursor];
 }
 
 fn matchN(self: *const Scanner, c: u8, n: comptime_int) bool {
@@ -226,7 +210,8 @@ fn matchN(self: *const Scanner, c: u8, n: comptime_int) bool {
 }
 
 fn scanString(self: *Scanner) !Token {
-    assert(self.peek() == '"');
+    assert(self.cursor < self.input.len);
+    assert(self.input[self.cursor] == '"');
 
     if (self.matchN('"', 3)) {
         return self.scanMultilineString();
@@ -514,7 +499,8 @@ fn scanMultilineString(self: *Scanner) !Token {
 }
 
 fn scanLiteralString(self: *Scanner) Error!Token {
-    assert(self.peek() == '\'');
+    assert(self.cursor < self.input.len);
+    assert(self.input[self.cursor] == '\'');
 
     if (self.matchN('\'', 3)) {
         return self.scanMultilineLiteralString();
