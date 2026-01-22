@@ -117,7 +117,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
                         // the characters that are not permitted.
                         0x0a => break,
                         0...8, 0x0b...0x1f, 0x7f => {
-                            return self.fail(.{ .err = error.InvalidControlCharacter });
+                            return self.fail(.{ .@"error" = error.InvalidControlCharacter });
                         },
                         else => {},
                     }
@@ -156,7 +156,7 @@ fn next(self: *Scanner, comptime key_mode: bool) Error!Token {
             },
             else => {
                 if (c <= 8 or (0x0a <= c and c <= 0x1f) or c == 0x7f) {
-                    return self.fail(.{ .err = error.InvalidControlCharacter });
+                    return self.fail(.{ .@"error" = error.InvalidControlCharacter });
                 }
 
                 self.cursor -= 1;
@@ -223,14 +223,14 @@ fn scanString(self: *Scanner) !Token {
     while (self.cursor < self.input.len and self.input[self.cursor] != '"') {
         var c = self.input[self.cursor];
         if (c == '\n' or c == '\r') {
-            return self.fail(.{ .err = error.UnterminatedString });
+            return self.fail(.{ .@"error" = error.UnterminatedString });
         }
 
         if (c == '\\') {
             self.cursor += 1;
 
             if (self.cursor >= self.input.len) {
-                return self.fail(.{ .err = error.UnterminatedString });
+                return self.fail(.{ .@"error" = error.UnterminatedString });
             }
 
             c = self.input[self.cursor];
@@ -243,7 +243,7 @@ fn scanString(self: *Scanner) !Token {
                 'e' => if (self.features.escape_e) {
                     self.cursor += 1;
                 } else {
-                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                 },
 
                 // \xHH for Unicode codepoints < 256.
@@ -251,30 +251,30 @@ fn scanString(self: *Scanner) !Token {
                     self.cursor += 1;
 
                     if (self.cursor + 2 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..2) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
                     }
                 } else {
-                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                 },
 
                 'u' => {
                     self.cursor += 1;
 
                     if (self.cursor + 4 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..4) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
@@ -285,32 +285,32 @@ fn scanString(self: *Scanner) !Token {
                     self.cursor += 1;
 
                     if (self.cursor + 8 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..8) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
                     }
                 },
 
-                else => return self.fail(.{ .err = error.InvalidEscapeSequence }),
+                else => return self.fail(.{ .@"error" = error.InvalidEscapeSequence }),
             }
         } else if (isValidChar(c) or c == ' ' or c == '\t') {
             // TODO: See the uses for `isValidChar` and determine if
             // the whitespaces should be included in it.
             self.cursor += 1;
         } else {
-            return self.fail(.{ .err = error.InvalidControlCharacter });
+            return self.fail(.{ .@"error" = error.InvalidControlCharacter });
         }
     }
 
     // TODO: Do we compare self.input[self.cursor] != '"' here?
     if (self.cursor >= self.input.len) {
-        return self.fail(.{ .err = error.UnterminatedString });
+        return self.fail(.{ .@"error" = error.UnterminatedString });
     }
 
     assert(self.input[self.cursor] == '"');
@@ -353,7 +353,7 @@ fn scanMultilineString(self: *Scanner) !Token {
             if (i >= 3) {
                 if (i > 5) {
                     return self.fail(.{
-                        .err = error.UnexpectedToken,
+                        .@"error" = error.UnexpectedToken,
                         .msg = "invalid closing quotes",
                     });
                 }
@@ -373,7 +373,7 @@ fn scanMultilineString(self: *Scanner) !Token {
             self.cursor += 1;
 
             if (self.cursor >= self.input.len) {
-                return self.fail(.{ .err = error.UnterminatedString });
+                return self.fail(.{ .@"error" = error.UnterminatedString });
             }
 
             c = self.input[self.cursor];
@@ -384,37 +384,37 @@ fn scanMultilineString(self: *Scanner) !Token {
                 'e' => if (self.features.escape_e) {
                     self.cursor += 1;
                 } else {
-                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                 },
 
                 'x' => if (self.features.escape_xhh) {
                     self.cursor += 1;
 
                     if (self.cursor + 2 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..2) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
                     }
                 } else {
-                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                 },
 
                 'u' => {
                     self.cursor += 1;
 
                     if (self.cursor + 4 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..4) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
@@ -425,12 +425,12 @@ fn scanMultilineString(self: *Scanner) !Token {
                     self.cursor += 1;
 
                     if (self.cursor + 8 > self.input.len) {
-                        return self.fail(.{ .err = error.InvalidEscapeSequence });
+                        return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                     }
 
                     for (0..8) |_| {
                         if (!std.ascii.isHex(self.input[self.cursor])) {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
 
                         self.cursor += 1;
@@ -451,7 +451,7 @@ fn scanMultilineString(self: *Scanner) !Token {
                     self.line += 1;
                     try self.skipLineEndingWhitespace();
                 } else {
-                    return self.fail(.{ .err = error.InvalidEscapeSequence });
+                    return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                 },
 
                 ' ', '\t' => {
@@ -470,7 +470,7 @@ fn scanMultilineString(self: *Scanner) !Token {
                             self.line += 1;
                             break;
                         } else {
-                            return self.fail(.{ .err = error.InvalidEscapeSequence });
+                            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
                         }
                     }
 
@@ -478,7 +478,7 @@ fn scanMultilineString(self: *Scanner) !Token {
                     try self.skipLineEndingWhitespace();
                 },
 
-                else => return self.fail(.{ .err = error.InvalidEscapeSequence }),
+                else => return self.fail(.{ .@"error" = error.InvalidEscapeSequence }),
             }
         } else if (c == '\n') {
             self.cursor += 1;
@@ -491,11 +491,11 @@ fn scanMultilineString(self: *Scanner) !Token {
         } else if (isValidChar(c) or c == ' ' or c == '\t') {
             self.cursor += 1;
         } else {
-            return self.fail(.{ .err = error.InvalidControlCharacter });
+            return self.fail(.{ .@"error" = error.InvalidControlCharacter });
         }
     }
 
-    return self.fail(.{ .err = error.UnterminatedString });
+    return self.fail(.{ .@"error" = error.UnterminatedString });
 }
 
 fn scanLiteralString(self: *Scanner) Error!Token {
@@ -512,17 +512,17 @@ fn scanLiteralString(self: *Scanner) Error!Token {
     while (self.cursor < self.input.len and self.input[self.cursor] != '\'') : (self.cursor += 1) {
         const c = self.input[self.cursor];
         if (c == '\n' or c == '\r') {
-            return self.fail(.{ .err = error.UnterminatedString });
+            return self.fail(.{ .@"error" = error.UnterminatedString });
         }
 
         if (!isValidChar(c) and c != '\t') {
-            return self.fail(.{ .err = error.InvalidControlCharacter });
+            return self.fail(.{ .@"error" = error.InvalidControlCharacter });
         }
     }
 
     // TODO: Do we compare self.input[self.cursor] != '\'' here?
     if (self.cursor >= self.input.len) {
-        return self.fail(.{ .err = error.UnterminatedString });
+        return self.fail(.{ .@"error" = error.UnterminatedString });
     }
 
     assert(self.input[self.cursor] == '\'');
@@ -563,7 +563,7 @@ fn scanMultilineLiteralString(self: *Scanner) Error!Token {
             if (i >= 3) {
                 if (i > 5) {
                     return self.fail(.{
-                        .err = error.UnexpectedToken,
+                        .@"error" = error.UnexpectedToken,
                         .msg = "invalid closing quotes",
                     });
                 }
@@ -590,11 +590,11 @@ fn scanMultilineLiteralString(self: *Scanner) Error!Token {
         } else if (isValidChar(c) or c == ' ' or c == '\t') {
             self.cursor += 1;
         } else {
-            return self.fail(.{ .err = error.InvalidEscapeSequence });
+            return self.fail(.{ .@"error" = error.InvalidEscapeSequence });
         }
     }
 
-    return self.fail(.{ .err = error.UnterminatedString });
+    return self.fail(.{ .@"error" = error.UnterminatedString });
 }
 
 fn scanLiteral(self: *Scanner) Error!Token {
@@ -730,7 +730,7 @@ fn scanDatetime(self: *Scanner) Error!Token {
     };
 
     if (!dt.isValid()) {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     return if (dt.tz == null) .{ .local_datetime = dt } else .{ .datetime = dt };
@@ -753,25 +753,23 @@ fn readDate(self: *Scanner) Error!Date {
     assert(self.cursor + 4 < self.input.len);
     assert(std.ascii.isDigit(self.input[self.cursor]));
 
-    // TODO: See if `readDigits` can be streamlined and the numbers read
-    // straight into the correct types.
-    const year = try self.readDigits(u16, 4);
+    const year = try self.readDatetimeDigits(u16, 4);
 
     if (self.cursor >= self.input.len or self.input[self.cursor] != '-') {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     self.cursor += 1;
 
-    const month = try self.readDigits(u8, 2);
+    const month = try self.readDatetimeDigits(u8, 2);
 
     if (self.cursor >= self.input.len or self.input[self.cursor] != '-') {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     self.cursor += 1;
 
-    const day = try self.readDigits(u8, 2);
+    const day = try self.readDatetimeDigits(u8, 2);
 
     const result: Date = .{
         .year = year,
@@ -779,7 +777,7 @@ fn readDate(self: *Scanner) Error!Date {
         .day = day,
     };
     if (!result.isValid()) {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     return result;
@@ -790,36 +788,36 @@ fn readTime(self: *Scanner, comptime local_time: bool) Error!Time {
     assert(std.ascii.isDigit(self.input[self.cursor]));
     assert(std.ascii.isDigit(self.input[self.cursor + 1]));
 
-    const hour = try self.readDigits(u8, 2);
+    const hour = try self.readDatetimeDigits(u8, 2);
 
     if (self.cursor >= self.input.len or self.input[self.cursor] != ':') {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     self.cursor += 1;
 
-    const minute = try self.readDigits(u8, 2);
+    const minute = try self.readDatetimeDigits(u8, 2);
 
     var second: u8 = 0;
     var seconds_read = false;
     if (self.cursor < self.input.len and self.input[self.cursor] == ':') {
         self.cursor += 1;
-        second = try self.readDigits(u8, 2);
+        second = try self.readDatetimeDigits(u8, 2);
         seconds_read = true;
     } else if (!self.features.optional_seconds or !local_time) {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     var nano: ?u32 = null;
     if (self.cursor < self.input.len and self.input[self.cursor] == '.') {
         if (!seconds_read) {
-            return self.fail(.{ .err = error.InvalidDatetime });
+            return self.fail(.{ .@"error" = error.InvalidDatetime });
         }
 
         self.cursor += 1;
 
         if (self.cursor >= self.input.len or !std.ascii.isDigit(self.input[self.cursor])) {
-            return self.fail(.{ .err = error.InvalidDatetime });
+            return self.fail(.{ .@"error" = error.InvalidDatetime });
         }
 
         var n: u32 = 0;
@@ -842,7 +840,7 @@ fn readTime(self: *Scanner, comptime local_time: bool) Error!Time {
     const time: Time = .{ .hour = hour, .minute = minute, .second = second, .nano = nano };
 
     if (!time.isValid()) {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     return time;
@@ -864,24 +862,24 @@ fn readTimezone(self: *Scanner) Error!?i16 {
     const sign: i16 = if (c == '-') -1 else 1;
     self.cursor += 1;
 
-    const hour = @as(i16, try self.readDigits(u8, 2));
+    const hour = @as(i16, try self.readDatetimeDigits(u8, 2));
 
     if (self.cursor >= self.input.len or self.input[self.cursor] != ':') {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     self.cursor += 1;
 
-    const minute = @as(i16, try self.readDigits(u8, 2));
+    const minute = @as(i16, try self.readDatetimeDigits(u8, 2));
 
     if (hour > 23 or minute > 59) {
-        return self.fail(.{ .err = error.InvalidDatetime });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     return sign * (hour * 60 + minute);
 }
 
-fn readDigits(self: *Scanner, comptime T: type, comptime n: usize) Error!T {
+fn readDatetimeDigits(self: *Scanner, comptime T: type, comptime n: usize) Error!T {
     comptime {
         if (n < 1) {
             @compileError("number of digits must be greater than 0");
@@ -889,14 +887,14 @@ fn readDigits(self: *Scanner, comptime T: type, comptime n: usize) Error!T {
 
         const info = @typeInfo(T);
         if (info != .int or info.int.signedness != .unsigned) {
-            @compileError("readDigits requires an unsigned integer type");
+            @compileError("readDatetimeDigits requires an unsigned integer type");
         }
 
         const max_digits = switch (T) {
             u8 => 2,
             u16 => 4,
             u32 => 9,
-            else => @compileError("readDigits requires u8, u16, or u32"),
+            else => @compileError("readDatetimeDigits requires u8, u16, or u32"),
         };
 
         if (n > max_digits) {
@@ -911,14 +909,14 @@ fn readDigits(self: *Scanner, comptime T: type, comptime n: usize) Error!T {
     }
 
     if (self.cursor + n > self.input.len) {
-        return self.fail(.{ .err = error.InvalidInteger });
+        return self.fail(.{ .@"error" = error.InvalidDatetime });
     }
 
     var result: T = 0;
     inline for (0..n) |_| {
         const c = self.input[self.cursor];
         if (!std.ascii.isDigit(c)) {
-            return self.fail(.{ .err = error.InvalidInteger });
+            return self.fail(.{ .@"error" = error.InvalidDatetime });
         }
 
         result = result * 10 + @as(T, c - '0');
@@ -949,16 +947,15 @@ fn skipLineEndingWhitespace(self: *Scanner) !void {
         }
     }
 
-    return self.fail(.{ .err = error.UnterminatedString });
+    return self.fail(.{ .@"error" = error.UnterminatedString });
 }
 
 /// Fail the parsing in the Scanner. This either fills the Diagnostics with
 /// the appropriate information and returns `error.Reported` or returns
 /// the given error.
-fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null }) Error {
+fn fail(self: *const Scanner, opts: struct { @"error": Error, msg: ?[]const u8 = null }) Error {
     if (self.diagnostics) |d| {
-        const msg = if (opts.msg) |m| m else switch (opts.err) {
-            error.IntegerOverflow => "integer overflow",
+        const msg = if (opts.msg) |m| m else switch (opts.@"error") {
             error.InvalidControlCharacter => "invalid control character",
             error.InvalidDatetime => "invalid datetime",
             error.InvalidEscapeSequence => "invalid escape sequence",
@@ -974,7 +971,7 @@ fn fail(self: *const Scanner, opts: struct { err: Error, msg: ?[]const u8 = null
         return error.Reported;
     }
 
-    return opts.err;
+    return opts.@"error";
 }
 
 fn isValidChar(c: u8) bool {
@@ -2028,109 +2025,109 @@ test nextValue {
     try runNextKeyValueTests(next_value_test_cases, false);
 }
 
-test readDigits {
+test readDatetimeDigits {
     {
         var s = Scanner.init(std.testing.allocator, "0", .{});
-        try std.testing.expectEqual(0, try s.readDigits(u8, 1));
-    }
-    {
-        var s = Scanner.init(std.testing.allocator, "0", .{});
-        try std.testing.expectEqual(0, try s.readDigits(u16, 1));
+        try std.testing.expectEqual(0, try s.readDatetimeDigits(u8, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "0", .{});
-        try std.testing.expectEqual(0, try s.readDigits(u32, 1));
+        try std.testing.expectEqual(0, try s.readDatetimeDigits(u16, 1));
+    }
+    {
+        var s = Scanner.init(std.testing.allocator, "0", .{});
+        try std.testing.expectEqual(0, try s.readDatetimeDigits(u32, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1", .{});
-        try std.testing.expectEqual(1, try s.readDigits(u8, 1));
+        try std.testing.expectEqual(1, try s.readDatetimeDigits(u8, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1", .{});
-        try std.testing.expectEqual(1, try s.readDigits(u16, 1));
+        try std.testing.expectEqual(1, try s.readDatetimeDigits(u16, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1", .{});
-        try std.testing.expectEqual(1, try s.readDigits(u32, 1));
+        try std.testing.expectEqual(1, try s.readDatetimeDigits(u32, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "4", .{});
-        try std.testing.expectEqual(4, try s.readDigits(u8, 1));
+        try std.testing.expectEqual(4, try s.readDatetimeDigits(u8, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "4", .{});
-        try std.testing.expectEqual(4, try s.readDigits(u16, 1));
+        try std.testing.expectEqual(4, try s.readDatetimeDigits(u16, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "4", .{});
-        try std.testing.expectEqual(4, try s.readDigits(u32, 1));
+        try std.testing.expectEqual(4, try s.readDatetimeDigits(u32, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "10", .{});
-        try std.testing.expectEqual(10, try s.readDigits(u8, 2));
+        try std.testing.expectEqual(10, try s.readDatetimeDigits(u8, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "10", .{});
-        try std.testing.expectEqual(10, try s.readDigits(u16, 2));
+        try std.testing.expectEqual(10, try s.readDatetimeDigits(u16, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "10", .{});
-        try std.testing.expectEqual(10, try s.readDigits(u32, 2));
+        try std.testing.expectEqual(10, try s.readDatetimeDigits(u32, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "13", .{});
-        try std.testing.expectEqual(13, try s.readDigits(u8, 2));
+        try std.testing.expectEqual(13, try s.readDatetimeDigits(u8, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "13", .{});
-        try std.testing.expectEqual(13, try s.readDigits(u16, 2));
+        try std.testing.expectEqual(13, try s.readDatetimeDigits(u16, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "13", .{});
-        try std.testing.expectEqual(13, try s.readDigits(u32, 2));
+        try std.testing.expectEqual(13, try s.readDatetimeDigits(u32, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "123", .{});
-        try std.testing.expectEqual(123, try s.readDigits(u16, 3));
+        try std.testing.expectEqual(123, try s.readDatetimeDigits(u16, 3));
     }
     {
         var s = Scanner.init(std.testing.allocator, "123", .{});
-        try std.testing.expectEqual(123, try s.readDigits(u32, 3));
+        try std.testing.expectEqual(123, try s.readDatetimeDigits(u32, 3));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1000", .{});
-        try std.testing.expectEqual(1000, try s.readDigits(u16, 4));
+        try std.testing.expectEqual(1000, try s.readDatetimeDigits(u16, 4));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1000", .{});
-        try std.testing.expectEqual(1000, try s.readDigits(u32, 4));
+        try std.testing.expectEqual(1000, try s.readDatetimeDigits(u32, 4));
     }
     {
         var s = Scanner.init(std.testing.allocator, "82305", .{});
-        try std.testing.expectEqual(82305, try s.readDigits(u32, 5));
+        try std.testing.expectEqual(82305, try s.readDatetimeDigits(u32, 5));
     }
     {
         var s = Scanner.init(std.testing.allocator, "100000000", .{});
-        try std.testing.expectEqual(100000000, try s.readDigits(u32, 9));
+        try std.testing.expectEqual(100000000, try s.readDatetimeDigits(u32, 9));
     }
     {
         var s = Scanner.init(std.testing.allocator, "0", .{});
-        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 2));
+        try std.testing.expectError(error.InvalidDatetime, s.readDatetimeDigits(u8, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, "1", .{});
-        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 2));
+        try std.testing.expectError(error.InvalidDatetime, s.readDatetimeDigits(u8, 2));
     }
     {
         var s = Scanner.init(std.testing.allocator, " ", .{});
-        try std.testing.expectError(error.InvalidInteger, s.readDigits(u8, 1));
+        try std.testing.expectError(error.InvalidDatetime, s.readDatetimeDigits(u8, 1));
     }
     {
         var s = Scanner.init(std.testing.allocator, "abcd", .{});
-        try std.testing.expectError(error.InvalidInteger, s.readDigits(u16, 4));
+        try std.testing.expectError(error.InvalidDatetime, s.readDatetimeDigits(u16, 4));
     }
     {
         var s = Scanner.init(std.testing.allocator, "0xFF", .{});
-        try std.testing.expectError(error.InvalidInteger, s.readDigits(u32, 4));
+        try std.testing.expectError(error.InvalidDatetime, s.readDatetimeDigits(u32, 4));
     }
 }
