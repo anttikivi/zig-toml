@@ -22,12 +22,11 @@ cursor: usize = 0,
 line: usize = 1,
 diagnostics: ?*Diagnostics = null,
 
-const Error = Allocator.Error || error{
-    IntegerOverflow,
+const Error = Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || error{
     InvalidControlCharacter,
     InvalidDatetime,
     InvalidEscapeSequence,
-    InvalidInteger,
+    InvalidNumber,
     UnexpectedToken,
     UnterminatedString,
     Reported,
@@ -689,7 +688,7 @@ fn scanNonstringValue(self: *Scanner) Error!Token {
         return self.scanLocalTime();
     }
 
-    return self.fail(.{ .err = error.UnexpectedToken });
+    return self.scanNumber();
 }
 
 fn scanDatetime(self: *Scanner) Error!Token {
@@ -928,6 +927,79 @@ fn readDatetimeDigits(self: *Scanner, comptime T: type, comptime n: usize) Error
     return result;
 }
 
+// TODO: Make this more robust so that the parser shows the correct position
+// when it encounters an invalid character. Probably implementing the integer
+// parsing myself is the best way to do this.
+fn scanNumber(self: *Scanner) Error!Token {
+    const start = self.cursor;
+    var has_sign = false;
+
+    if (self.cursor < self.input.len and
+        (self.input[self.cursor] == '+' or self.input[self.cursor] == '-'))
+    {
+        has_sign = true;
+        self.cursor += 1;
+    }
+
+    var has_base = false;
+
+    if (self.cursor + 1 < self.input.len and self.input[self.cursor] == '0') {
+        // Disallow capital letter for denoting the base according to the TOML
+        // spec.
+        const c = self.input[self.cursor + 1];
+        if (c == 'B' or c == 'O' or c == 'X') {
+            return self.fail(.{ .@"error" = error.InvalidNumber });
+        }
+
+        if (c == 'b' or c == 'o' or c == 'x') {
+            if (has_sign) {
+                return self.fail(.{ .@"error" = error.InvalidNumber });
+            }
+
+            has_base = true;
+            self.cursor += 2;
+        }
+    }
+    while (self.cursor < self.input.len and
+        (self.input[self.cursor] == '+' or
+            self.input[self.cursor] == '-' or
+            self.input[self.cursor] == '.' or
+            self.input[self.cursor] == '_' or
+            std.ascii.isHex(self.input[self.cursor])))
+    {
+        self.cursor += 1;
+    }
+
+    const buf = self.input[start..self.cursor];
+    var try_float = false;
+
+    const int = std.fmt.parseInt(i64, buf, 0) catch |err| switch (err) {
+        error.InvalidCharacter => blk: {
+            try_float = true;
+            break :blk 0;
+        },
+        error.Overflow => return self.fail(.{ .@"error" = error.Overflow }),
+    };
+
+    if (!try_float) {
+        if (buf[0] == '0' and buf.len > 1 and !has_base) {
+            return self.fail(.{ .@"error" = error.InvalidNumber });
+        }
+
+        return .{ .int = int };
+    }
+
+    if (buf[0] == '.' or buf[buf.len - 1] == '.') {
+        return self.fail(.{ .@"error" = error.InvalidNumber });
+    }
+
+    const float = std.fmt.parseFloat(f64, buf) catch return self.fail(.{
+        .@"error" = error.InvalidNumber,
+    });
+
+    return .{ .float = float };
+}
+
 /// Skips the whitespace after a line-ending backslash in a multiline string.
 fn skipLineEndingWhitespace(self: *Scanner) !void {
     while (self.cursor < self.input.len) {
@@ -954,17 +1026,20 @@ fn skipLineEndingWhitespace(self: *Scanner) !void {
 /// the appropriate information and returns `error.Reported` or returns
 /// the given error.
 fn fail(self: *const Scanner, opts: struct { @"error": Error, msg: ?[]const u8 = null }) Error {
+    assert(opts.@"error" != error.InvalidCharacter);
+    assert(opts.@"error" != error.Reported);
+    assert(opts.@"error" != error.OutOfMemory);
+
     if (self.diagnostics) |d| {
         const msg = if (opts.msg) |m| m else switch (opts.@"error") {
             error.InvalidControlCharacter => "invalid control character",
             error.InvalidDatetime => "invalid datetime",
             error.InvalidEscapeSequence => "invalid escape sequence",
-            error.InvalidInteger => "invalid datetime",
+            error.InvalidNumber => "invalid number",
+            error.Overflow => "integer overflow",
             error.UnexpectedToken => "unexpected token",
             error.UnterminatedString => "unterminated string",
-            error.Reported => @panic("fail with error.Reported"),
-            // OOM should not go through this function.
-            error.OutOfMemory => @panic("fail with error.OutOfMemory"),
+            error.InvalidCharacter, error.Reported, error.OutOfMemory => unreachable,
         };
         try d.initLineKnown(self.gpa, msg, self.input, self.cursor, self.line);
 
@@ -1897,6 +1972,105 @@ const next_value_test_cases = next_test_cases ++ [_]NextTestCase{
         },
     },
     // TODO: Devise a way to check the NaNs.
+    .{
+        .input =
+        \\0
+        ,
+        .seq = &[_]TestToken{
+            .{ .int = 0 },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\01
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidNumber },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0b011011
+        ,
+        .seq = &[_]TestToken{
+            .{ .int = 27 },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0o041
+        ,
+        .seq = &[_]TestToken{
+            .{ .int = 33 },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0xAF
+        ,
+        .seq = &[_]TestToken{
+            .{ .int = 175 },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0x_AFAB
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidNumber },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0xAFAB_
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidNumber },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0.1
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = 0.1 },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0.1_
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidNumber },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\0.1e
+        ,
+        .seq = &[_]TestToken{
+            .{ .@"error" = error.InvalidNumber },
+            .end_of_file,
+        },
+    },
+    .{
+        .input =
+        \\1.0e3
+        ,
+        .seq = &[_]TestToken{
+            .{ .float = 1.0e3 },
+            .end_of_file,
+        },
+    },
 };
 
 fn convertUnion(source: anytype, comptime Dest: type) Dest {
